@@ -39,25 +39,28 @@ if(NOT EXISTS "${ONNXR_INCLUDE}/onnxruntime/core/session/onnxruntime_c_api.h")
   message(FATAL_ERROR "${ONNXR_INCLUDE} 缺少 onnxruntime 头文件")
 endif()
 
-find_library(ONNXR_LIBRARY
-  NAMES onnxruntime libonnxruntime
-  HINTS "${ONNXR_LIB_DIR}"
-  PATH_SUFFIXES ""
+set(_onnxr_lib_candidates
+  "${ONNXR_LIB_DIR}/libonnxruntime.so"
+  "${ONNXR_LIB_DIR}/libonnxruntime.so.1"
+  "${ONNXR_LIB_DIR}/libonnxruntime.so.1.22.1"
+  "${ONNXR_LIB_DIR}/libonnxruntime.a"
 )
+set(ONNXR_LIBRARY "")
+foreach(_cand ${_onnxr_lib_candidates})
+  if(EXISTS "${_cand}")
+    set(ONNXR_LIBRARY "${_cand}")
+    break()
+  endif()
+endforeach()
 if(NOT ONNXR_LIBRARY)
-  message(FATAL_ERROR "未在 ${ONNXR_LIB_DIR} 找到 libonnxruntime")
+  message(FATAL_ERROR "未在 ${ONNXR_LIB_DIR} 找到 libonnxruntime.{so,a}")
 endif()
 
-find_library(ONNXR_LORA NAMES onnxruntime_lora PATHS "${ONNXR_LIB_DIR}" NO_DEFAULT_PATH)
-find_library(ONNXR_PROVIDERS NAMES onnxruntime_providers PATHS "${ONNXR_LIB_DIR}" NO_DEFAULT_PATH)
-find_library(ONNXR_OPTIMIZER NAMES onnxruntime_optimizer PATHS "${ONNXR_LIB_DIR}" NO_DEFAULT_PATH)
-find_library(ONNXR_SESSION NAMES onnxruntime_session PATHS "${ONNXR_LIB_DIR}" NO_DEFAULT_PATH)
-find_library(ONNXR_UTIL NAMES onnxruntime_util PATHS "${ONNXR_LIB_DIR}" NO_DEFAULT_PATH)
-
 set(_onnxr_extra_libs)
-foreach(_lib IN ITEMS ONNXR_LORA ONNXR_PROVIDERS ONNXR_OPTIMIZER ONNXR_SESSION ONNXR_UTIL)
-  if(${_lib})
-    list(APPEND _onnxr_extra_libs ${${_lib}})
+foreach(_suffix IN ITEMS lora providers optimizer session util)
+  set(_lib "${ONNXR_LIB_DIR}/libonnxruntime_${_suffix}.a")
+  if(EXISTS "${_lib}")
+    list(APPEND _onnxr_extra_libs "${_lib}")
   endif()
 endforeach()
 
