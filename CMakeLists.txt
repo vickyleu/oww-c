@@ -27,39 +27,39 @@ endif()
 
 set(OWW_ROOT ${CMAKE_CURRENT_SOURCE_DIR})
 
+# ONNXR 指向你解压/安装好的 onnxruntime 根目录 (含 include/ lib/)
 if(NOT DEFINED ONNXR)
-  message(FATAL_ERROR "pass -DONNXR=/absolute/path/to/onnxruntime/install-a64")
+  message(FATAL_ERROR "pass -DONNXR=/path/to/onnxruntime/prefix")
 endif()
 
-set(_onnxr_hint_roots
-  "${ONNXR}"
-  "${ONNXR}/onnxruntime"
-  "${ONNXR}/ort-aarch64-1.22.1"
-  "${ONNXR}/Release"
-)
-set(_onnxr_candidate_configs)
-foreach(_root ${_onnxr_hint_roots})
-  list(APPEND _onnxr_candidate_configs
-    "${_root}/onnxruntimeConfig.cmake"
-    "${_root}/lib/cmake/onnxruntime/onnxruntimeConfig.cmake"
-    "${_root}/cmake/onnxruntime/onnxruntimeConfig.cmake"
-  )
-endforeach()
+set(ONNXR_INCLUDE "${ONNXR}/include")
+set(ONNXR_LIB_DIR "${ONNXR}/lib")
 
-foreach(_cfg ${_onnxr_candidate_configs})
-  if(NOT onnxruntime_DIR AND EXISTS "${_cfg}")
-    get_filename_component(onnxruntime_DIR "${_cfg}" DIRECTORY)
+if(NOT EXISTS "${ONNXR_INCLUDE}/onnxruntime/core/session/onnxruntime_c_api.h")
+  message(FATAL_ERROR "${ONNXR_INCLUDE} 缺少 onnxruntime 头文件")
+endif()
+
+find_library(ONNXR_LIBRARY
+  NAMES onnxruntime libonnxruntime
+  HINTS "${ONNXR_LIB_DIR}"
+  PATH_SUFFIXES ""
+)
+if(NOT ONNXR_LIBRARY)
+  message(FATAL_ERROR "未在 ${ONNXR_LIB_DIR} 找到 libonnxruntime")
+endif()
+
+find_library(ONNXR_LORA NAMES onnxruntime_lora PATHS "${ONNXR_LIB_DIR}" NO_DEFAULT_PATH)
+find_library(ONNXR_PROVIDERS NAMES onnxruntime_providers PATHS "${ONNXR_LIB_DIR}" NO_DEFAULT_PATH)
+find_library(ONNXR_OPTIMIZER NAMES onnxruntime_optimizer PATHS "${ONNXR_LIB_DIR}" NO_DEFAULT_PATH)
+find_library(ONNXR_SESSION NAMES onnxruntime_session PATHS "${ONNXR_LIB_DIR}" NO_DEFAULT_PATH)
+find_library(ONNXR_UTIL NAMES onnxruntime_util PATHS "${ONNXR_LIB_DIR}" NO_DEFAULT_PATH)
+
+set(_onnxr_extra_libs)
+foreach(_lib IN ITEMS ONNXR_LORA ONNXR_PROVIDERS ONNXR_OPTIMIZER ONNXR_SESSION ONNXR_UTIL)
+  if(${_lib})
+    list(APPEND _onnxr_extra_libs ${${_lib}})
   endif()
 endforeach()
-
-if(NOT onnxruntime_DIR)
-  message(FATAL_ERROR "未找到 onnxruntimeConfig.cmake，检查 ONNXR=${ONNXR} 目录结构是否包含 onnxruntime 安装产物")
-endif()
-
-find_package(onnxruntime CONFIG REQUIRED)
-if(DEFINED onnxruntime_VERSION AND onnxruntime_VERSION VERSION_LESS "1.22.1")
-  message(FATAL_ERROR "当前 onnxruntime 版本 ${onnxruntime_VERSION} 过旧，需 >= 1.22.1")
-endif()
 
 find_package(Threads REQUIRED)
 
@@ -70,10 +70,12 @@ target_include_directories(oww
   PUBLIC
     $<BUILD_INTERFACE:${OWW_ROOT}/include>
     $<INSTALL_INTERFACE:include>
+    ${ONNXR_INCLUDE}
 )
 target_link_libraries(oww
   PUBLIC
-    onnxruntime::onnxruntime
+    ${ONNXR_LIBRARY}
+    ${_onnxr_extra_libs}
     Threads::Threads
 )
 if(UNIX AND NOT APPLE)
