@@ -6,6 +6,7 @@
 #include <cstring>
 #include <algorithm>
 #include <stdexcept>
+#include <cstdio>
 
 static const OrtApi* A() { return OrtGetApiBase()->GetApi(ORT_API_VERSION); }
 
@@ -117,9 +118,29 @@ oww_handle* oww_create(const char* melspec_onnx,
   h->ort.det   = load_session(h->ort.env, h->ort.so, detector_onnx);
 
   // Cache primary output names for stricter ORT versions.
-  h->ort.mels_out0  = ort_get_output_name(h, h->ort.mels, 0);
-  h->ort.embed_out0 = ort_get_output_name(h, h->ort.embed, 0);
-  h->ort.det_out0   = ort_get_output_name(h, h->ort.det, 0);
+  try {
+    h->ort.mels_out0 = ort_get_output_name(h, h->ort.mels, 0);
+    std::printf("MEL output name: %s\n", h->ort.mels_out0.c_str());
+  } catch (const std::exception& e) {
+    std::printf("MEL model error: %s\n", e.what());
+    throw;
+  }
+
+  try {
+    h->ort.embed_out0 = ort_get_output_name(h, h->ort.embed, 0);
+    std::printf("EMBED output name: %s\n", h->ort.embed_out0.c_str());
+  } catch (const std::exception& e) {
+    std::printf("EMBED model error: %s\n", e.what());
+    throw;
+  }
+
+  try {
+    h->ort.det_out0 = ort_get_output_name(h, h->ort.det, 0);
+    std::printf("DET output name: %s\n", h->ort.det_out0.c_str());
+  } catch (const std::exception& e) {
+    std::printf("DET model error: %s\n", e.what());
+    throw;
+  }
 
   get_embed_shape(h);
   get_det_shape(h);
