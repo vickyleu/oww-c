@@ -76,24 +76,29 @@ foreach(_lib ${_ort_lib_candidates})
 endforeach()
 
 if(_onnxruntime_search_paths)
-  find_library(OWW_ONNXR_PRIMARY
-    NAMES onnxruntime
-    PATHS ${_onnxruntime_search_paths}
-    NO_DEFAULT_PATH
-  )
-  if(OWW_ONNXR_PRIMARY)
-    set(OWW_ONNXR_LIBS ${OWW_ONNXR_PRIMARY})
-    foreach(_suffix IN ITEMS lora providers optimizer session util)
-      find_library(_extra_lib
-        NAMES onnxruntime_${_suffix}
-        PATHS ${_onnxruntime_search_paths}
-        NO_DEFAULT_PATH
-      )
-      if(_extra_lib)
-        list(APPEND OWW_ONNXR_LIBS ${_extra_lib})
+  set(_onnxr_primary_lib "")
+  foreach(_dir ${_onnxruntime_search_paths})
+    foreach(_name IN ITEMS libonnxruntime.so libonnxruntime.dylib libonnxruntime.dll.a libonnxruntime.a)
+      if(EXISTS "${_dir}/${_name}")
+        set(_onnxr_primary_lib "${_dir}/${_name}")
+        break()
       endif()
     endforeach()
-  endif()
+    if(_onnxr_primary_lib)
+      set(OWW_ONNXR_LIBS ${_onnxr_primary_lib})
+      foreach(_suffix IN ITEMS lora providers optimizer session util)
+        foreach(_extra_name IN ITEMS
+            libonnxruntime_${_suffix}.so
+            libonnxruntime_${_suffix}.a)
+          if(EXISTS "${_dir}/${_extra_name}")
+            list(APPEND OWW_ONNXR_LIBS "${_dir}/${_extra_name}")
+            break()
+          endif()
+        endforeach()
+      endforeach()
+      break()
+    endif()
+  endforeach()
 endif()
 
 option(OWW_USE_PKGCONFIG "尝试使用 pkg-config 自动查找 onnxruntime" ON)
