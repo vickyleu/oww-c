@@ -78,7 +78,7 @@ static std::string ort_get_output_name(oww_handle* h, OrtSession* sess, size_t i
   oww_handle::ORTCHK(A()->SessionGetOutputCount(sess, &count));
   if(index >= count) return "output";
   char* tmp=nullptr;
-  oww_handle::ORTCHK(A()->SessionGetOutputName(sess, h->ort.alloc, index, &tmp));
+  oww_handle::ORTCHK(A()->SessionGetOutputName(sess, index, h->ort.alloc, &tmp));
   std::string name = (tmp && tmp[0] != '\0') ? tmp : "output";
   if(tmp) h->ort.alloc->Free(h->ort.alloc, tmp);
   return name;
