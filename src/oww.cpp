@@ -37,6 +37,9 @@ struct OwwOrt {
   OrtSession* embed=nullptr;
   OrtSession* det=nullptr;
   OrtAllocator* alloc=nullptr;
+  std::string mels_in0;
+  std::string embed_in0;
+  std::string det_in0;
   std::string mels_out0;
   std::string embed_out0;
   std::string det_out0;
@@ -93,6 +96,30 @@ static OrtSession* load_session(OrtEnv* env, OrtSessionOptions* so, const char* 
   OrtSession* s=nullptr; oww_handle::ORTCHK(A()->CreateSession(env, path, so, &s)); return s;
 }
 
+static std::string ort_get_input_name(oww_handle* h, OrtSession* sess, size_t index){
+  if(!h->ort.alloc){
+    throw std::runtime_error("ORT allocator not initialized");
+  }
+
+  size_t count=0;
+  oww_handle::ORTCHK(A()->SessionGetInputCount(sess, &count));
+  if(index >= count){
+    throw std::out_of_range("ORT input index out of range");
+  }
+
+  char* tmp=nullptr;
+  oww_handle::ORTCHK(A()->SessionGetInputName(sess, index, h->ort.alloc, &tmp));
+
+  if(!tmp || tmp[0] == '\0'){
+    if(tmp) h->ort.alloc->Free(h->ort.alloc, tmp);
+    throw std::runtime_error("DEBUG: ORT input name cannot be empty - this is from our modified oww library");
+  }
+
+  std::string name(tmp);
+  h->ort.alloc->Free(h->ort.alloc, tmp);
+  return name;
+}
+
 static std::string ort_get_output_name(oww_handle* h, OrtSession* sess, size_t index){
   if(!h->ort.alloc){
     throw std::runtime_error("ORT allocator not initialized");
@@ -122,7 +149,8 @@ oww_handle* oww_create(const char* melspec_onnx,
                        const char* detector_onnx,
                        int threads,
                        float threshold){
-  // 故意崩溃测试 - 移动到ort_get_output_name调用处
+  // 故意崩溃测试 - 第一步
+  throw std::runtime_error("CRASH_TEST_1: oww_create function entry");
   
   // 立即输出，确保函数被调用
   write(STDOUT_FILENO, "[OWW_CREATE_CALLED]\n", 20);
@@ -165,13 +193,32 @@ oww_handle* oww_create(const char* melspec_onnx,
   h->ort.det   = load_session(h->ort.env, h->ort.so, detector_onnx);
   DEBUG_PRINTF("DET session loaded successfully");
 
-  // 使用硬编码的输出名称避免 ONNX Runtime 版本兼容性问题
-  DEBUG_PRINTF("Using hardcoded output names...");
-  h->ort.mels_out0 = "output";
-  h->ort.embed_out0 = "output";
-  h->ort.det_out0 = "output";
-  DEBUG_PRINTF("Output names set: MEL=%s, EMBED=%s, DET=%s", 
-               h->ort.mels_out0.c_str(), h->ort.embed_out0.c_str(), h->ort.det_out0.c_str());
+  // 获取输入和输出名称
+  DEBUG_PRINTF("Getting input and output names...");
+  
+  DEBUG_PRINTF("Getting MEL input name...");
+  h->ort.mels_in0 = ort_get_input_name(h, h->ort.mels, 0);
+  DEBUG_PRINTF("MEL input name: %s", h->ort.mels_in0.c_str());
+  
+  DEBUG_PRINTF("Getting MEL output name...");
+  h->ort.mels_out0 = ort_get_output_name(h, h->ort.mels, 0);
+  DEBUG_PRINTF("MEL output name: %s", h->ort.mels_out0.c_str());
+  
+  DEBUG_PRINTF("Getting EMBED input name...");
+  h->ort.embed_in0 = ort_get_input_name(h, h->ort.embed, 0);
+  DEBUG_PRINTF("EMBED input name: %s", h->ort.embed_in0.c_str());
+  
+  DEBUG_PRINTF("Getting EMBED output name...");
+  h->ort.embed_out0 = ort_get_output_name(h, h->ort.embed, 0);
+  DEBUG_PRINTF("EMBED output name: %s", h->ort.embed_out0.c_str());
+  
+  DEBUG_PRINTF("Getting DET input name...");
+  h->ort.det_in0 = ort_get_input_name(h, h->ort.det, 0);
+  DEBUG_PRINTF("DET input name: %s", h->ort.det_in0.c_str());
+  
+  DEBUG_PRINTF("Getting DET output name...");
+  h->ort.det_out0 = ort_get_output_name(h, h->ort.det, 0);
+  DEBUG_PRINTF("DET output name: %s", h->ort.det_out0.c_str());
 
   DEBUG_PRINTF("Getting model shapes...");
   get_embed_shape(h);
@@ -206,9 +253,9 @@ static OrtValue* make_tensor_f32(const float* data, size_t count){
 static void run_mels(oww_handle* h, const float* chunk, size_t n){
   DEBUG_PRINTF("run_mels: processing %zu samples", n);
   OrtValue* in = make_tensor_f32(chunk, n);
-  const char* in_names[]  = {"input"};
+  const char* in_names[]  = {h->ort.mels_in0.c_str()};
   const char* out_names[] = {h->ort.mels_out0.c_str()};
-  DEBUG_PRINTF("run_mels: calling MEL session with output name: %s", h->ort.mels_out0.c_str());
+  DEBUG_PRINTF("run_mels: calling MEL session with input name: %s, output name: %s", h->ort.mels_in0.c_str(), h->ort.mels_out0.c_str());
   OrtValue* out=nullptr;
   oww_handle::ORTCHK(A()->Run(h->ort.mels, nullptr, in_names, (const OrtValue* const*)&in, 1, out_names, 1, &out));
   A()->ReleaseValue(in);
@@ -264,7 +311,7 @@ static void try_make_embeddings(oww_handle* h, int newly_added_frames){
                                                            shape, 4, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, &in));
     A()->ReleaseMemoryInfo(mi);
 
-    const char* in_names[]={"input"}; const char* out_names[]={h->ort.embed_out0.c_str()};
+    const char* in_names[]={h->ort.embed_in0.c_str()}; const char* out_names[]={h->ort.embed_out0.c_str()};
     OrtValue* out=nullptr; oww_handle::ORTCHK(A()->Run(h->ort.embed, nullptr, in_names, (const OrtValue* const*)&in, 1, out_names, 1, &out));
     A()->ReleaseValue(in);
 
@@ -308,8 +355,8 @@ static int try_detect(oww_handle* h){
   oww_handle::ORTCHK(A()->CreateTensorWithDataAsOrtValue(mi, x.data(), x.size()*sizeof(float),
                                                          shape, 3, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, &in));
   A()->ReleaseMemoryInfo(mi);
-  const char* in_names[]={"input"}; const char* out_names[]={h->ort.det_out0.c_str()};
-  DEBUG_PRINTF("try_detect: calling DET session with output name: %s", h->ort.det_out0.c_str());
+  const char* in_names[]={h->ort.det_in0.c_str()}; const char* out_names[]={h->ort.det_out0.c_str()};
+  DEBUG_PRINTF("try_detect: calling DET session with input name: %s, output name: %s", h->ort.det_in0.c_str(), h->ort.det_out0.c_str());
   OrtValue* out=nullptr; oww_handle::ORTCHK(A()->Run(h->ort.det, nullptr, in_names, (const OrtValue* const*)&in, 1, out_names, 1, &out));
   A()->ReleaseValue(in);
   DEBUG_PRINTF("try_detect: DET session run completed");
