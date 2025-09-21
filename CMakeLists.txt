@@ -28,111 +28,77 @@ endif()
 set(OWW_ROOT ${CMAKE_CURRENT_SOURCE_DIR})
 
 # 允许首选环境变量 ORT_PREFIX，或者直接传 -DONNXR=...
-if(NOT DEFINED ONNXR)
-  if(DEFINED ENV{ORT_PREFIX} AND NOT "$ENV{ORT_PREFIX}" STREQUAL "")
-    set(ONNXR $ENV{ORT_PREFIX})
-  endif()
+set(_ort_prefix_candidates)
+if(DEFINED ONNXR AND NOT "${ONNXR}" STREQUAL "")
+  list(APPEND _ort_prefix_candidates "${ONNXR}")
+elseif(DEFINED ENV{ORT_PREFIX} AND NOT "$ENV{ORT_PREFIX}" STREQUAL "")
+  list(APPEND _ort_prefix_candidates "$ENV{ORT_PREFIX}")
 endif()
+
+set(_ort_include_candidates)
+if(DEFINED ONNXR_INCLUDE_DIR AND NOT "${ONNXR_INCLUDE_DIR}" STREQUAL "")
+  list(APPEND _ort_include_candidates "${ONNXR_INCLUDE_DIR}")
+endif()
+if(DEFINED ENV{ORT_INCLUDE_DIR} AND NOT "$ENV{ORT_INCLUDE_DIR}" STREQUAL "")
+  list(APPEND _ort_include_candidates "$ENV{ORT_INCLUDE_DIR}")
+endif()
+
+set(_ort_lib_candidates)
+if(DEFINED ONNXR_LIB_DIR AND NOT "${ONNXR_LIB_DIR}" STREQUAL "")
+  list(APPEND _ort_lib_candidates "${ONNXR_LIB_DIR}")
+endif()
+if(DEFINED ENV{ORT_LIB_DIR} AND NOT "$ENV{ORT_LIB_DIR}" STREQUAL "")
+  list(APPEND _ort_lib_candidates "$ENV{ORT_LIB_DIR}")
+endif()
+
+foreach(_prefix ${_ort_prefix_candidates})
+  list(APPEND _ort_include_candidates "${_prefix}/include")
+  list(APPEND _ort_lib_candidates "${_prefix}/lib")
+endforeach()
+
+list(REMOVE_DUPLICATES _ort_include_candidates)
+list(REMOVE_DUPLICATES _ort_lib_candidates)
 
 set(OWW_ONNXR_INCLUDE_DIRS "")
-set(OWW_ONNXR_LIBS "")
-
-set(_oww_prefix_candidates)
-if(DEFINED ONNXR AND NOT "${ONNXR}" STREQUAL "")
-  list(APPEND _oww_prefix_candidates "${ONNXR}")
-endif()
-
-foreach(_prefix ${_oww_prefix_candidates})
-  set(_include_dir "${_prefix}/include")
-  set(_lib_dir "${_prefix}/lib")
-  if(EXISTS "${_include_dir}/onnxruntime/core/session/onnxruntime_c_api.h" AND NOT OWW_ONNXR_INCLUDE_DIRS)
-    set(OWW_ONNXR_INCLUDE_DIRS "${_include_dir}")
-  endif()
-  if(EXISTS "${_lib_dir}" AND NOT OWW_ONNXR_LIBS)
-    set(_onnxr_primary_candidates
-      "${_lib_dir}/libonnxruntime.so"
-      "${_lib_dir}/libonnxruntime.so.1"
-      "${_lib_dir}/libonnxruntime.so.1.22.1"
-      "${_lib_dir}/libonnxruntime.a"
-    )
-    set(_onnxr_primary_lib "")
-    foreach(_cand ${_onnxr_primary_candidates})
-      if(EXISTS "${_cand}")
-        set(_onnxr_primary_lib "${_cand}")
-        break()
-      endif()
-    endforeach()
-    if(NOT _onnxr_primary_lib STREQUAL "")
-      set(_onnxr_extra_libs)
-      foreach(_suffix IN ITEMS lora providers optimizer session util)
-        set(_lib "${_lib_dir}/libonnxruntime_${_suffix}.a")
-        if(EXISTS "${_lib}")
-          list(APPEND _onnxr_extra_libs "${_lib}")
-        endif()
-      endforeach()
-      set(OWW_ONNXR_LIBS ${_onnxr_primary_lib} ${_onnxr_extra_libs})
-    endif()
-  endif()
-  if(OWW_ONNXR_INCLUDE_DIRS AND OWW_ONNXR_LIBS)
+foreach(_inc ${_ort_include_candidates})
+  if(EXISTS "${_inc}/onnxruntime/core/session/onnxruntime_c_api.h")
+    set(OWW_ONNXR_INCLUDE_DIRS "${_inc}")
     break()
   endif()
 endforeach()
 
-# 若需要，支持分别指定 include / lib 目录
-if(NOT OWW_ONNXR_INCLUDE_DIRS)
-  set(_include_candidates)
-  if(DEFINED ONNXR_INCLUDE_DIR AND NOT "${ONNXR_INCLUDE_DIR}" STREQUAL "")
-    list(APPEND _include_candidates "${ONNXR_INCLUDE_DIR}")
-  elseif(DEFINED ENV{ORT_INCLUDE_DIR} AND NOT "$ENV{ORT_INCLUDE_DIR}" STREQUAL "")
-    list(APPEND _include_candidates "$ENV{ORT_INCLUDE_DIR}")
+set(OWW_ONNXR_LIBS "")
+set(_onnxruntime_search_paths)
+foreach(_lib ${_ort_lib_candidates})
+  if(EXISTS "${_lib}")
+    list(APPEND _onnxruntime_search_paths "${_lib}")
   endif()
-  foreach(_inc ${_include_candidates})
-    if(EXISTS "${_inc}/onnxruntime/core/session/onnxruntime_c_api.h")
-      set(OWW_ONNXR_INCLUDE_DIRS "${_inc}")
-      break()
-    endif()
-  endforeach()
-endif()
+endforeach()
 
-if(NOT OWW_ONNXR_LIBS)
-  set(_lib_candidates)
-  if(DEFINED ONNXR_LIB_DIR AND NOT "${ONNXR_LIB_DIR}" STREQUAL "")
-    list(APPEND _lib_candidates "${ONNXR_LIB_DIR}")
-  elseif(DEFINED ENV{ORT_LIB_DIR} AND NOT "$ENV{ORT_LIB_DIR}" STREQUAL "")
-    list(APPEND _lib_candidates "$ENV{ORT_LIB_DIR}")
-  endif()
-  foreach(_lib_dir ${_lib_candidates})
-    set(_onnxr_primary_candidates
-      "${_lib_dir}/libonnxruntime.so"
-      "${_lib_dir}/libonnxruntime.so.1"
-      "${_lib_dir}/libonnxruntime.so.1.22.1"
-      "${_lib_dir}/libonnxruntime.a"
-    )
-    set(_onnxr_primary_lib "")
-    foreach(_cand ${_onnxr_primary_candidates})
-      if(EXISTS "${_cand}")
-        set(_onnxr_primary_lib "${_cand}")
-        break()
+if(_onnxruntime_search_paths)
+  find_library(OWW_ONNXR_PRIMARY
+    NAMES onnxruntime
+    PATHS ${_onnxruntime_search_paths}
+    NO_DEFAULT_PATH
+  )
+  if(OWW_ONNXR_PRIMARY)
+    set(OWW_ONNXR_LIBS ${OWW_ONNXR_PRIMARY})
+    foreach(_suffix IN ITEMS lora providers optimizer session util)
+      find_library(_extra_lib
+        NAMES onnxruntime_${_suffix}
+        PATHS ${_onnxruntime_search_paths}
+        NO_DEFAULT_PATH
+      )
+      if(_extra_lib)
+        list(APPEND OWW_ONNXR_LIBS ${_extra_lib})
       endif()
     endforeach()
-    if(NOT _onnxr_primary_lib STREQUAL "")
-      set(_onnxr_extra_libs)
-      foreach(_suffix IN ITEMS lora providers optimizer session util)
-        set(_lib "${_lib_dir}/libonnxruntime_${_suffix}.a")
-        if(EXISTS "${_lib}")
-          list(APPEND _onnxr_extra_libs "${_lib}")
-        endif()
-      endforeach()
-      set(OWW_ONNXR_LIBS ${_onnxr_primary_lib} ${_onnxr_extra_libs})
-      break()
-    endif()
-  endforeach()
+  endif()
 endif()
 
 option(OWW_USE_PKGCONFIG "尝试使用 pkg-config 自动查找 onnxruntime" ON)
 
-# 如果没有显式路径，尝试 pkg-config
-if(OWW_USE_PKGCONFIG AND (NOT OWW_ONNXR_LIBS OR NOT OWW_ONNXR_INCLUDE_DIRS))
+if((NOT OWW_ONNXR_INCLUDE_DIRS OR NOT OWW_ONNXR_LIBS) AND OWW_USE_PKGCONFIG)
   find_package(PkgConfig QUIET)
   if(PkgConfig_FOUND)
     pkg_check_modules(ONNXR_PKG QUIET IMPORTED_TARGET onnxruntime)
@@ -147,8 +113,12 @@ if(OWW_USE_PKGCONFIG AND (NOT OWW_ONNXR_LIBS OR NOT OWW_ONNXR_INCLUDE_DIRS))
   endif()
 endif()
 
-if(NOT OWW_ONNXR_INCLUDE_DIRS OR NOT OWW_ONNXR_LIBS)
-  message(FATAL_ERROR "未能找到完整的 onnxruntime 开发包。请设置 ONNXR=/prefix 或分别提供 ONNXR_INCLUDE_DIR / ONNXR_LIB_DIR（或导出 ORT_INCLUDE_DIR / ORT_LIB_DIR），也可安装带 pkg-config 的 onnxruntime 开发包。")
+if(NOT OWW_ONNXR_INCLUDE_DIRS)
+  message(FATAL_ERROR "未找到 onnxruntime 头文件。请设置 ONNXR_INCLUDE_DIR 或 ORT_INCLUDE_DIR 指向包含 onnxruntime/core/session/onnxruntime_c_api.h 的目录，或提供 ONNXR 前缀")
+endif()
+
+if(NOT OWW_ONNXR_LIBS)
+  message(FATAL_ERROR "未找到 onnxruntime 库。请设置 ONNXR_LIB_DIR 或 ORT_LIB_DIR 指向包含 libonnxruntime.* 的目录，或提供 ONNXR 前缀")
 endif()
 
 find_package(Threads REQUIRED)
