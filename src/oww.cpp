@@ -149,8 +149,7 @@ oww_handle* oww_create(const char* melspec_onnx,
                        const char* detector_onnx,
                        int threads,
                        float threshold){
-  // 故意崩溃测试 - 第一步
-  throw std::runtime_error("CRASH_TEST_1: oww_create function entry");
+  // 移除崩溃测试，使用正常的初始化流程
   
   // 立即输出，确保函数被调用
   write(STDOUT_FILENO, "[OWW_CREATE_CALLED]\n", 20);
