@@ -78,7 +78,7 @@ static std::string ort_get_output_name(oww_handle* h, OrtSession* sess, size_t i
   oww_handle::ORTCHK(A()->SessionGetOutputCount(sess, &count));
   if(index >= count) return "output";
   char* tmp=nullptr;
-  oww_handle::ORTCHK(A()->SessionGetOutputNameAllocated(sess, index, h->ort.alloc, &tmp));
+  oww_handle::ORTCHK(A()->SessionGetOutputName(sess, h->ort.alloc, index, &tmp));
   std::string name = (tmp && tmp[0] != '\0') ? tmp : "output";
   if(tmp) h->ort.alloc->Free(h->ort.alloc, tmp);
   return name;
@@ -93,9 +93,11 @@ oww_handle* oww_create(const char* melspec_onnx,
   // ORT init
   oww_handle::ORTCHK(A()->CreateEnv(ORT_LOGGING_LEVEL_WARNING, "oww", &h->ort.env));
   oww_handle::ORTCHK(A()->CreateSessionOptions(&h->ort.so));
-  A()->SetIntraOpNumThreads(h->ort.so, threads);
-  A()->SetSessionGraphOptimizationLevel(h->ort.so, ORT_ENABLE_BASIC);
-  A()->GetAllocatorWithDefaultOptions(&h->ort.alloc);
+  oww_handle::ORTCHK(A()->SetIntraOpNumThreads(h->ort.so, threads));
+#if ORT_API_VERSION >= 12
+  oww_handle::ORTCHK(A()->SetSessionGraphOptimizationLevel(h->ort.so, ORT_ENABLE_BASIC));
+#endif
+  oww_handle::ORTCHK(A()->GetAllocatorWithDefaultOptions(&h->ort.alloc));
 
   // load three sessions
   h->ort.mels  = load_session(h->ort.env, h->ort.so, melspec_onnx);
