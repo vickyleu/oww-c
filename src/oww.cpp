@@ -10,22 +10,9 @@
 #include <unistd.h>
 #include <syslog.h>
 
-// 强制刷新输出的调试宏 - 多重输出确保可见
+// 调试宏 - 已禁用频繁日志
 #define DEBUG_PRINTF(fmt, ...) do { \
-    printf("[OWW_DEBUG] " fmt "\n", ##__VA_ARGS__); \
-    fprintf(stderr, "[OWW_DEBUG] " fmt "\n", ##__VA_ARGS__); \
-    fflush(stdout); \
-    fflush(stderr); \
-    fsync(STDOUT_FILENO); \
-    fsync(STDERR_FILENO); \
-    /* 写入系统日志 */ \
-    syslog(LOG_INFO, "[OWW_DEBUG] " fmt, ##__VA_ARGS__); \
-    /* 写入文件 */ \
-    FILE* f = fopen("/tmp/oww_debug.log", "a"); \
-    if(f) { \
-        fprintf(f, "[OWW_DEBUG] " fmt "\n", ##__VA_ARGS__); \
-        fclose(f); \
-    } \
+    /* 调试日志已禁用，仅在必要时启用 */ \
 } while(0)
 
 static const OrtApi* A() { return OrtGetApiBase()->GetApi(ORT_API_VERSION); }
@@ -151,82 +138,44 @@ oww_handle* oww_create(const char* melspec_onnx,
                        float threshold){
   // 移除崩溃测试，使用正常的初始化流程
   
-  // 立即输出，确保函数被调用
-  write(STDOUT_FILENO, "[OWW_CREATE_CALLED]\n", 20);
-  write(STDERR_FILENO, "[OWW_CREATE_CALLED]\n", 20);
-  
-  DEBUG_PRINTF("=== oww_create START ===");
-  DEBUG_PRINTF("MEL model: %s", melspec_onnx);
-  DEBUG_PRINTF("EMBED model: %s", embed_onnx);
-  DEBUG_PRINTF("DET model: %s", detector_onnx);
-  DEBUG_PRINTF("Threads: %d, Threshold: %.3f", threads, threshold);
+  // 初始化OpenWakeWord
   
   auto h = new oww_handle();
-  DEBUG_PRINTF("Handle created");
   
   // ORT init
-  DEBUG_PRINTF("Creating ORT environment...");
   oww_handle::ORTCHK(A()->CreateEnv(ORT_LOGGING_LEVEL_WARNING, "oww", &h->ort.env));
-  DEBUG_PRINTF("Creating session options...");
   oww_handle::ORTCHK(A()->CreateSessionOptions(&h->ort.so));
-  DEBUG_PRINTF("Setting intra-op threads to %d...", threads);
   oww_handle::ORTCHK(A()->SetIntraOpNumThreads(h->ort.so, threads));
 #if ORT_API_VERSION >= 12
-  DEBUG_PRINTF("Setting graph optimization level...");
   oww_handle::ORTCHK(A()->SetSessionGraphOptimizationLevel(h->ort.so, ORT_ENABLE_BASIC));
 #endif
-  DEBUG_PRINTF("Getting allocator...");
   oww_handle::ORTCHK(A()->GetAllocatorWithDefaultOptions(&h->ort.alloc));
-  DEBUG_PRINTF("ORT initialization complete");
 
   // load three sessions
-  DEBUG_PRINTF("Loading MEL session: %s", melspec_onnx);
   h->ort.mels  = load_session(h->ort.env, h->ort.so, melspec_onnx);
-  DEBUG_PRINTF("MEL session loaded successfully");
   
-  DEBUG_PRINTF("Loading EMBED session: %s", embed_onnx);
   h->ort.embed = load_session(h->ort.env, h->ort.so, embed_onnx);
-  DEBUG_PRINTF("EMBED session loaded successfully");
   
-  DEBUG_PRINTF("Loading DET session: %s", detector_onnx);
   h->ort.det   = load_session(h->ort.env, h->ort.so, detector_onnx);
-  DEBUG_PRINTF("DET session loaded successfully");
 
   // 获取输入和输出名称
-  DEBUG_PRINTF("Getting input and output names...");
   
-  DEBUG_PRINTF("Getting MEL input name...");
   h->ort.mels_in0 = ort_get_input_name(h, h->ort.mels, 0);
-  DEBUG_PRINTF("MEL input name: %s", h->ort.mels_in0.c_str());
   
-  DEBUG_PRINTF("Getting MEL output name...");
   h->ort.mels_out0 = ort_get_output_name(h, h->ort.mels, 0);
-  DEBUG_PRINTF("MEL output name: %s", h->ort.mels_out0.c_str());
   
-  DEBUG_PRINTF("Getting EMBED input name...");
   h->ort.embed_in0 = ort_get_input_name(h, h->ort.embed, 0);
-  DEBUG_PRINTF("EMBED input name: %s", h->ort.embed_in0.c_str());
   
-  DEBUG_PRINTF("Getting EMBED output name...");
   h->ort.embed_out0 = ort_get_output_name(h, h->ort.embed, 0);
-  DEBUG_PRINTF("EMBED output name: %s", h->ort.embed_out0.c_str());
   
-  DEBUG_PRINTF("Getting DET input name...");
   h->ort.det_in0 = ort_get_input_name(h, h->ort.det, 0);
-  DEBUG_PRINTF("DET input name: %s", h->ort.det_in0.c_str());
   
-  DEBUG_PRINTF("Getting DET output name...");
   h->ort.det_out0 = ort_get_output_name(h, h->ort.det, 0);
-  DEBUG_PRINTF("DET output name: %s", h->ort.det_out0.c_str());
 
-  DEBUG_PRINTF("Getting model shapes...");
   get_embed_shape(h);
-  DEBUG_PRINTF("Embed shape: mel_win=%d, mel_bins=%d", h->mel_win, h->mel_bins);
   get_det_shape(h);
-  DEBUG_PRINTF("Det shape: det_T=%d, det_D=%d", h->det_T, h->det_D);
 
   h->threshold = threshold;
-  DEBUG_PRINTF("=== oww_create SUCCESS ===");
   return h;
 }
 
@@ -250,15 +199,12 @@ static OrtValue* make_tensor_f32(const float* data, size_t count){
 
 // 调 melspectrogram.onnx -> 输出形状推断并做 (x/10+2) 归一化
 static void run_mels(oww_handle* h, const float* chunk, size_t n){
-  DEBUG_PRINTF("run_mels: processing %zu samples", n);
   OrtValue* in = make_tensor_f32(chunk, n);
   const char* in_names[]  = {h->ort.mels_in0.c_str()};
   const char* out_names[] = {h->ort.mels_out0.c_str()};
-  DEBUG_PRINTF("run_mels: calling MEL session with input name: %s, output name: %s", h->ort.mels_in0.c_str(), h->ort.mels_out0.c_str());
   OrtValue* out=nullptr;
   oww_handle::ORTCHK(A()->Run(h->ort.mels, nullptr, in_names, (const OrtValue* const*)&in, 1, out_names, 1, &out));
   A()->ReleaseValue(in);
-  DEBUG_PRINTF("run_mels: MEL session run completed");
 
   // 读输出
   OrtTensorTypeAndShapeInfo* tsh=nullptr;
@@ -272,7 +218,6 @@ static void run_mels(oww_handle* h, const float* chunk, size_t n){
 
   // 约定输出形如 [1, frames, mel_bins] 或 [frames, mel_bins]
   int frames = (int)(total / std::max(1, h->mel_bins));
-  DEBUG_PRINTF("run_mels: output shape total=%zu, frames=%d, mel_bins=%d", total, frames, h->mel_bins);
   for(int f=0; f<frames; ++f){
     for(int b=0; b<h->mel_bins; ++b){
       float v = p[f*h->mel_bins + b];
@@ -281,7 +226,6 @@ static void run_mels(oww_handle* h, const float* chunk, size_t n){
     }
   }
   A()->ReleaseValue(out);
-  DEBUG_PRINTF("run_mels: completed, added %d frames", frames);
 }
 
 // 从 mel_buf 尽可能提取嵌入（滑窗步长=按新进帧数）
@@ -337,7 +281,6 @@ static void try_make_embeddings(oww_handle* h, int newly_added_frames){
 
 static int try_detect(oww_handle* h){
   int emb_n = (int)h->emb_buf.size() / h->det_D;
-  DEBUG_PRINTF("try_detect: emb_n=%d, det_T=%d, det_D=%d", emb_n, h->det_T, h->det_D);
   if(emb_n < h->det_T) return 0;
 
   // 取最后 det_T 个嵌入 => [1, det_T, det_D]
@@ -346,7 +289,6 @@ static int try_detect(oww_handle* h){
     int base = t*h->det_D;
     for(int d=0; d<h->det_D; ++d) x.push_back(h->emb_buf[base+d]);
   }
-  DEBUG_PRINTF("try_detect: prepared input tensor with %zu elements", x.size());
 
   OrtMemoryInfo* mi=nullptr; oww_handle::ORTCHK(A()->CreateCpuMemoryInfo(OrtArenaAllocator, OrtMemTypeDefault, &mi));
   OrtValue* in=nullptr;
@@ -355,15 +297,12 @@ static int try_detect(oww_handle* h){
                                                          shape, 3, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, &in));
   A()->ReleaseMemoryInfo(mi);
   const char* in_names[]={h->ort.det_in0.c_str()}; const char* out_names[]={h->ort.det_out0.c_str()};
-  DEBUG_PRINTF("try_detect: calling DET session with input name: %s, output name: %s", h->ort.det_in0.c_str(), h->ort.det_out0.c_str());
   OrtValue* out=nullptr; oww_handle::ORTCHK(A()->Run(h->ort.det, nullptr, in_names, (const OrtValue* const*)&in, 1, out_names, 1, &out));
   A()->ReleaseValue(in);
-  DEBUG_PRINTF("try_detect: DET session run completed");
 
   float* p=nullptr; oww_handle::ORTCHK(A()->GetTensorMutableData(out, (void**)&p));
   h->last = p[0];
   A()->ReleaseValue(out);
-  DEBUG_PRINTF("try_detect: score=%.4f, threshold=%.3f", h->last, h->threshold);
   return (h->last >= h->threshold) ? 1 : 0;
 }
 
@@ -390,12 +329,9 @@ int oww_process_f32(oww_handle* h, const float* pcm, size_t samples){
 }
 
 int oww_process_i16(oww_handle* h, const short* x, size_t samples){
-  DEBUG_PRINTF("oww_process_i16: processing %zu samples", samples);
   std::vector<float> f(samples);
   for(size_t i=0;i<samples;i++) f[i] = (float)x[i] / 32768.0f;
-  DEBUG_PRINTF("oww_process_i16: converted to float, calling feed_pcm");
   int result = feed_pcm(h, f.data(), samples);
-  DEBUG_PRINTF("oww_process_i16: feed_pcm returned %d", result);
   return result;
 }
 
