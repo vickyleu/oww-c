@@ -16,6 +16,9 @@ struct OwwOrt {
   OrtSession* embed=nullptr;
   OrtSession* det=nullptr;
   OrtAllocator* alloc=nullptr;
+  std::string mels_out0;
+  std::string embed_out0;
+  std::string det_out0;
   ~OwwOrt(){
     if(det)   A()->ReleaseSession(det);
     if(embed) A()->ReleaseSession(embed);
@@ -69,6 +72,18 @@ static OrtSession* load_session(OrtEnv* env, OrtSessionOptions* so, const char* 
   OrtSession* s=nullptr; oww_handle::ORTCHK(A()->CreateSession(env, path, so, &s)); return s;
 }
 
+static std::string ort_get_output_name(oww_handle* h, OrtSession* sess, size_t index){
+  if(!h->ort.alloc) return "output";
+  size_t count=0;
+  oww_handle::ORTCHK(A()->SessionGetOutputCount(sess, &count));
+  if(index >= count) return "output";
+  char* tmp=nullptr;
+  oww_handle::ORTCHK(A()->SessionGetOutputNameAllocated(sess, index, h->ort.alloc, &tmp));
+  std::string name = (tmp && tmp[0] != '\0') ? tmp : "output";
+  if(tmp) h->ort.alloc->Free(h->ort.alloc, tmp);
+  return name;
+}
+
 oww_handle* oww_create(const char* melspec_onnx,
                        const char* embed_onnx,
                        const char* detector_onnx,
@@ -86,6 +101,11 @@ oww_handle* oww_create(const char* melspec_onnx,
   h->ort.mels  = load_session(h->ort.env, h->ort.so, melspec_onnx);
   h->ort.embed = load_session(h->ort.env, h->ort.so, embed_onnx);
   h->ort.det   = load_session(h->ort.env, h->ort.so, detector_onnx);
+
+  // Cache primary output names for stricter ORT versions.
+  h->ort.mels_out0  = ort_get_output_name(h, h->ort.mels, 0);
+  h->ort.embed_out0 = ort_get_output_name(h, h->ort.embed, 0);
+  h->ort.det_out0   = ort_get_output_name(h, h->ort.det, 0);
 
   get_embed_shape(h);
   get_det_shape(h);
@@ -116,7 +136,7 @@ static OrtValue* make_tensor_f32(const float* data, size_t count){
 static void run_mels(oww_handle* h, const float* chunk, size_t n){
   OrtValue* in = make_tensor_f32(chunk, n);
   const char* in_names[]  = {"input"};
-  const char* out_names[] = {nullptr}; // 取第0个输出
+  const char* out_names[] = {h->ort.mels_out0.c_str()};
   OrtValue* out=nullptr;
   oww_handle::ORTCHK(A()->Run(h->ort.mels, nullptr, in_names, (const OrtValue* const*)&in, 1, out_names, 1, &out));
   A()->ReleaseValue(in);
@@ -169,7 +189,7 @@ static void try_make_embeddings(oww_handle* h, int newly_added_frames){
                                                            shape, 4, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, &in));
     A()->ReleaseMemoryInfo(mi);
 
-    const char* in_names[]={"input"}; const char* out_names[]={nullptr};
+    const char* in_names[]={"input"}; const char* out_names[]={h->ort.embed_out0.c_str()};
     OrtValue* out=nullptr; oww_handle::ORTCHK(A()->Run(h->ort.embed, nullptr, in_names, (const OrtValue* const*)&in, 1, out_names, 1, &out));
     A()->ReleaseValue(in);
 
@@ -211,7 +231,7 @@ static int try_detect(oww_handle* h){
   oww_handle::ORTCHK(A()->CreateTensorWithDataAsOrtValue(mi, x.data(), x.size()*sizeof(float),
                                                          shape, 3, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, &in));
   A()->ReleaseMemoryInfo(mi);
-  const char* in_names[]={"input"}; const char* out_names[]={nullptr};
+  const char* in_names[]={"input"}; const char* out_names[]={h->ort.det_out0.c_str()};
   OrtValue* out=nullptr; oww_handle::ORTCHK(A()->Run(h->ort.det, nullptr, in_names, (const OrtValue* const*)&in, 1, out_names, 1, &out));
   A()->ReleaseValue(in);
 
