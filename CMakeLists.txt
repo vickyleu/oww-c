@@ -31,39 +31,54 @@ if(NOT DEFINED ONNXR)
   message(FATAL_ERROR "pass -DONNXR=/absolute/path/to/onnxruntime/install-a64")
 endif()
 
-find_path(ONNXR_INCLUDE_ROOT
-  NAMES onnxruntime/core/session/onnxruntime_c_api.h
-  HINTS "${ONNXR}/include"
+set(_onnxr_hint_roots
+  "${ONNXR}"
+  "${ONNXR}/onnxruntime"
+  "${ONNXR}/ort-aarch64-1.22.1"
+  "${ONNXR}/Release"
 )
-if(NOT ONNXR_INCLUDE_ROOT)
-  message(FATAL_ERROR "无法在 ${ONNXR} 下面找到 onnxruntime 头文件")
+set(_onnxr_candidate_configs)
+foreach(_root ${_onnxr_hint_roots})
+  list(APPEND _onnxr_candidate_configs
+    "${_root}/onnxruntimeConfig.cmake"
+    "${_root}/lib/cmake/onnxruntime/onnxruntimeConfig.cmake"
+    "${_root}/cmake/onnxruntime/onnxruntimeConfig.cmake"
+  )
+endforeach()
+
+foreach(_cfg ${_onnxr_candidate_configs})
+  if(NOT onnxruntime_DIR AND EXISTS "${_cfg}")
+    get_filename_component(onnxruntime_DIR "${_cfg}" DIRECTORY)
+  endif()
+endforeach()
+
+if(NOT onnxruntime_DIR)
+  message(FATAL_ERROR "未找到 onnxruntimeConfig.cmake，检查 ONNXR=${ONNXR} 目录结构是否包含 onnxruntime 安装产物")
 endif()
 
-find_library(ONNXR_LIBRARY
-  NAMES onnxruntime
-  HINTS "${ONNXR}/lib"
-)
-if(NOT ONNXR_LIBRARY)
-  message(FATAL_ERROR "无法在 ${ONNXR} 下面找到 onnxruntime 库")
+find_package(onnxruntime CONFIG REQUIRED)
+if(DEFINED onnxruntime_VERSION AND onnxruntime_VERSION VERSION_LESS "1.22.1")
+  message(FATAL_ERROR "当前 onnxruntime 版本 ${onnxruntime_VERSION} 过旧，需 >= 1.22.1")
 endif()
 
-set(OWW_LINK_LIBS ${ONNXR_LIBRARY} pthread m)
-if(UNIX AND NOT APPLE)
-  list(APPEND OWW_LINK_LIBS dl)
-endif()
+find_package(Threads REQUIRED)
 
 add_library(oww STATIC
   src/oww.cpp
 )
 target_include_directories(oww
   PUBLIC
-    ${OWW_ROOT}/include
-    ${ONNXR_INCLUDE_ROOT}
+    $<BUILD_INTERFACE:${OWW_ROOT}/include>
+    $<INSTALL_INTERFACE:include>
 )
 target_link_libraries(oww
   PUBLIC
-    ${OWW_LINK_LIBS}
+    onnxruntime::onnxruntime
+    Threads::Threads
 )
+if(UNIX AND NOT APPLE)
+  target_link_libraries(oww PUBLIC m dl)
+endif()
 set_target_properties(oww PROPERTIES
   C_VISIBILITY_PRESET hidden
   CXX_VISIBILITY_PRESET hidden
