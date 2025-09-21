@@ -8,12 +8,24 @@
 #include <stdexcept>
 #include <cstdio>
 #include <unistd.h>
+#include <syslog.h>
 
-// 强制刷新输出的调试宏
+// 强制刷新输出的调试宏 - 多重输出确保可见
 #define DEBUG_PRINTF(fmt, ...) do { \
     printf("[OWW_DEBUG] " fmt "\n", ##__VA_ARGS__); \
+    fprintf(stderr, "[OWW_DEBUG] " fmt "\n", ##__VA_ARGS__); \
     fflush(stdout); \
+    fflush(stderr); \
     fsync(STDOUT_FILENO); \
+    fsync(STDERR_FILENO); \
+    /* 写入系统日志 */ \
+    syslog(LOG_INFO, "[OWW_DEBUG] " fmt, ##__VA_ARGS__); \
+    /* 写入文件 */ \
+    FILE* f = fopen("/tmp/oww_debug.log", "a"); \
+    if(f) { \
+        fprintf(f, "[OWW_DEBUG] " fmt "\n", ##__VA_ARGS__); \
+        fclose(f); \
+    } \
 } while(0)
 
 static const OrtApi* A() { return OrtGetApiBase()->GetApi(ORT_API_VERSION); }
@@ -110,6 +122,10 @@ oww_handle* oww_create(const char* melspec_onnx,
                        const char* detector_onnx,
                        int threads,
                        float threshold){
+  // 立即输出，确保函数被调用
+  write(STDOUT_FILENO, "[OWW_CREATE_CALLED]\n", 20);
+  write(STDERR_FILENO, "[OWW_CREATE_CALLED]\n", 20);
+  
   DEBUG_PRINTF("=== oww_create START ===");
   DEBUG_PRINTF("MEL model: %s", melspec_onnx);
   DEBUG_PRINTF("EMBED model: %s", embed_onnx);
