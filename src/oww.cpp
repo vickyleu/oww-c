@@ -73,14 +73,26 @@ static OrtSession* load_session(OrtEnv* env, OrtSessionOptions* so, const char* 
 }
 
 static std::string ort_get_output_name(oww_handle* h, OrtSession* sess, size_t index){
-  if(!h->ort.alloc) return "output";
+  if(!h->ort.alloc){
+    throw std::runtime_error("ORT allocator not initialized");
+  }
+
   size_t count=0;
   oww_handle::ORTCHK(A()->SessionGetOutputCount(sess, &count));
-  if(index >= count) return "output";
+  if(index >= count){
+    throw std::out_of_range("ORT output index out of range");
+  }
+
   char* tmp=nullptr;
   oww_handle::ORTCHK(A()->SessionGetOutputName(sess, index, h->ort.alloc, &tmp));
-  std::string name = (tmp && tmp[0] != '\0') ? tmp : "output";
-  if(tmp) h->ort.alloc->Free(h->ort.alloc, tmp);
+
+  if(!tmp || tmp[0] == '\0'){
+    if(tmp) h->ort.alloc->Free(h->ort.alloc, tmp);
+    throw std::runtime_error("ORT output name cannot be empty");
+  }
+
+  std::string name(tmp);
+  h->ort.alloc->Free(h->ort.alloc, tmp);
   return name;
 }
 
