@@ -109,7 +109,7 @@ static std::string ort_get_output_name(oww_handle* h, OrtSession* sess, size_t i
 
   if(!tmp || tmp[0] == '\0'){
     if(tmp) h->ort.alloc->Free(h->ort.alloc, tmp);
-    throw std::runtime_error("ORT output name cannot be empty");
+    throw std::runtime_error("DEBUG: ORT output name cannot be empty - this is from our modified oww library");
   }
 
   std::string name(tmp);
@@ -122,6 +122,9 @@ oww_handle* oww_create(const char* melspec_onnx,
                        const char* detector_onnx,
                        int threads,
                        float threshold){
+  // 故意崩溃测试 - 第一步
+  throw std::runtime_error("CRASH_TEST_1: oww_create function entry");
+  
   // 立即输出，确保函数被调用
   write(STDOUT_FILENO, "[OWW_CREATE_CALLED]\n", 20);
   write(STDERR_FILENO, "[OWW_CREATE_CALLED]\n", 20);
@@ -163,34 +166,13 @@ oww_handle* oww_create(const char* melspec_onnx,
   h->ort.det   = load_session(h->ort.env, h->ort.so, detector_onnx);
   DEBUG_PRINTF("DET session loaded successfully");
 
-  // Cache primary output names for stricter ORT versions.
-  DEBUG_PRINTF("Getting output names...");
-  try {
-    DEBUG_PRINTF("Getting MEL output name...");
-    h->ort.mels_out0 = ort_get_output_name(h, h->ort.mels, 0);
-    DEBUG_PRINTF("MEL output name: %s", h->ort.mels_out0.c_str());
-  } catch (const std::exception& e) {
-    DEBUG_PRINTF("MEL model error: %s", e.what());
-    throw;
-  }
-
-  try {
-    DEBUG_PRINTF("Getting EMBED output name...");
-    h->ort.embed_out0 = ort_get_output_name(h, h->ort.embed, 0);
-    DEBUG_PRINTF("EMBED output name: %s", h->ort.embed_out0.c_str());
-  } catch (const std::exception& e) {
-    DEBUG_PRINTF("EMBED model error: %s", e.what());
-    throw;
-  }
-
-  try {
-    DEBUG_PRINTF("Getting DET output name...");
-    h->ort.det_out0 = ort_get_output_name(h, h->ort.det, 0);
-    DEBUG_PRINTF("DET output name: %s", h->ort.det_out0.c_str());
-  } catch (const std::exception& e) {
-    DEBUG_PRINTF("DET model error: %s", e.what());
-    throw;
-  }
+  // 使用硬编码的输出名称避免 ONNX Runtime 版本兼容性问题
+  DEBUG_PRINTF("Using hardcoded output names...");
+  h->ort.mels_out0 = "output";
+  h->ort.embed_out0 = "output";
+  h->ort.det_out0 = "output";
+  DEBUG_PRINTF("Output names set: MEL=%s, EMBED=%s, DET=%s", 
+               h->ort.mels_out0.c_str(), h->ort.embed_out0.c_str(), h->ort.det_out0.c_str());
 
   DEBUG_PRINTF("Getting model shapes...");
   get_embed_shape(h);
