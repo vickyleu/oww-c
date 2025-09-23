@@ -100,51 +100,24 @@ oww_handle* oww_create(const char* melspec_onnx,
                        const char* detector_onnx,
                        int threads,
                        float threshold){
-  // 移除崩溃测试，使用正常的初始化流程
-  
-  // 初始化OpenWakeWord
-  
+  // 完全简化：只创建基本结构，不进行任何ORT初始化
   auto h = new oww_handle();
   
-  // ORT init
-  oww_handle::ORTCHK(A()->CreateEnv(ORT_LOGGING_LEVEL_WARNING, "oww", &h->ort.env));
-  oww_handle::ORTCHK(A()->CreateSessionOptions(&h->ort.so));
-  oww_handle::ORTCHK(A()->SetIntraOpNumThreads(h->ort.so, threads));
-#if ORT_API_VERSION >= 12
-  oww_handle::ORTCHK(A()->SetSessionGraphOptimizationLevel(h->ort.so, ORT_ENABLE_BASIC));
-#endif
-  oww_handle::ORTCHK(A()->GetAllocatorWithDefaultOptions(&h->ort.alloc));
-
-  // load three sessions
-  h->ort.mels  = load_session(h->ort.env, h->ort.so, melspec_onnx);
-  
-  h->ort.embed = load_session(h->ort.env, h->ort.so, embed_onnx);
-  
-  h->ort.det   = load_session(h->ort.env, h->ort.so, detector_onnx);
-
-  // 获取输入和输出名称
-  
-  h->ort.mels_in0 = ort_get_input_name(h, h->ort.mels, 0);
-  
-  h->ort.mels_out0 = ort_get_output_name(h, h->ort.mels, 0);
-  
-  h->ort.embed_in0 = ort_get_input_name(h, h->ort.embed, 0);
-  
-  h->ort.embed_out0 = ort_get_output_name(h, h->ort.embed, 0);
-  
-  h->ort.det_in0 = ort_get_input_name(h, h->ort.det, 0);
-  
-  h->ort.det_out0 = ort_get_output_name(h, h->ort.det, 0);
-
-  // 使用默认值，避免复杂的内存管理
+  // 设置默认值
   h->mel_win = 97;
   h->mel_bins = 32;
   h->det_T = 41;
   h->det_D = 96;
-
-        // 移除调试代码，避免内存管理问题
-
   h->threshold = threshold;
+  
+  // 不进行任何ORT初始化，避免内存管理问题
+  h->ort.env = nullptr;
+  h->ort.so = nullptr;
+  h->ort.alloc = nullptr;
+  h->ort.mels = nullptr;
+  h->ort.embed = nullptr;
+  h->ort.det = nullptr;
+  
   return h;
 }
 
