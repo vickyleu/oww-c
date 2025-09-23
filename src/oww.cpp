@@ -276,11 +276,11 @@ static void try_make_embeddings(oww_handle* h, int newly_added_frames){
     
     // 修复：正确处理embedding输出的时间维
     // embedding输出应该是 (1, T_emb, 96)，需要把T_emb×96全部入队
-    OrtTensorTypeAndShapeInfo* out_tsh=nullptr;
+    const OrtTensorTypeAndShapeInfo* out_tsh=nullptr;
     oww_handle::ORTCHK(A()->GetTensorTypeAndShape(out, &out_tsh));
     size_t out_dimN=0; oww_handle::ORTCHK(A()->GetDimensionsCount(out_tsh, &out_dimN));
     std::vector<int64_t> out_dims(out_dimN); oww_handle::ORTCHK(A()->GetDimensions(out_tsh, out_dims.data(), out_dimN));
-    A()->ReleaseTensorTypeAndShapeInfo(out_tsh);
+    A()->ReleaseTensorTypeAndShapeInfo(const_cast<OrtTensorTypeAndShapeInfo*>(out_tsh));
     
     // 计算实际的时间维和特征维
     int T_emb = (out_dimN >= 2 && out_dims[1] > 0) ? (int)out_dims[1] : 41;  // 时间维
