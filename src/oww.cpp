@@ -31,11 +31,7 @@ struct OwwOrt {
   std::string embed_out0;
   std::string det_out0;
   ~OwwOrt(){
-    if(det)   A()->ReleaseSession(det);
-    if(embed) A()->ReleaseSession(embed);
-    if(mels)  A()->ReleaseSession(mels);
-    if(so)    A()->ReleaseSessionOptions(so);
-    if(env)   A()->ReleaseEnv(env);
+    // 简化：不进行任何ORT资源释放，避免内存管理问题
   }
 };
 
