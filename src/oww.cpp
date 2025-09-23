@@ -186,13 +186,13 @@ oww_handle* oww_create(const char* melspec_onnx,
         
         // 检查embedding输入维度
         OrtTypeInfo* embed_input_type = nullptr;
-        A()->SessionGetInputTypeInfo(h->ort.embed, 0, &embed_input_type);
+        oww_handle::ORTCHK(A()->SessionGetInputTypeInfo(h->ort.embed, 0, &embed_input_type));
         OrtTensorTypeAndShapeInfo* embed_input_shape = nullptr;
-        A()->GetTensorTypeAndShapeInfo(embed_input_type, &embed_input_shape);
+        oww_handle::ORTCHK(A()->CastTypeInfoToTensorInfo(embed_input_type, &embed_input_shape));
         size_t embed_input_dim_count = 0;
-        A()->GetDimensionsCount(embed_input_shape, &embed_input_dim_count);
+        oww_handle::ORTCHK(A()->GetDimensionsCount(embed_input_shape, &embed_input_dim_count));
         std::vector<int64_t> embed_input_dims(embed_input_dim_count);
-        A()->GetDimensions(embed_input_shape, embed_input_dims.data(), embed_input_dim_count);
+        oww_handle::ORTCHK(A()->GetDimensions(embed_input_shape, embed_input_dims.data(), embed_input_dim_count));
         printf("   embedding输入维度: [");
         for(size_t i = 0; i < embed_input_dim_count; i++) {
             printf("%ld", embed_input_dims[i]);
@@ -202,13 +202,13 @@ oww_handle* oww_create(const char* melspec_onnx,
         
         // 检查embedding输出维度
         OrtTypeInfo* embed_output_type = nullptr;
-        A()->SessionGetOutputTypeInfo(h->ort.embed, 0, &embed_output_type);
+        oww_handle::ORTCHK(A()->SessionGetOutputTypeInfo(h->ort.embed, 0, &embed_output_type));
         OrtTensorTypeAndShapeInfo* embed_output_shape = nullptr;
-        A()->GetTensorTypeAndShapeInfo(embed_output_type, &embed_output_shape);
+        oww_handle::ORTCHK(A()->CastTypeInfoToTensorInfo(embed_output_type, &embed_output_shape));
         size_t embed_output_dim_count = 0;
-        A()->GetDimensionsCount(embed_output_shape, &embed_output_dim_count);
+        oww_handle::ORTCHK(A()->GetDimensionsCount(embed_output_shape, &embed_output_dim_count));
         std::vector<int64_t> embed_output_dims(embed_output_dim_count);
-        A()->GetDimensions(embed_output_shape, embed_output_dims.data(), embed_output_dim_count);
+        oww_handle::ORTCHK(A()->GetDimensions(embed_output_shape, embed_output_dims.data(), embed_output_dim_count));
         printf("   embedding输出维度: [");
         for(size_t i = 0; i < embed_output_dim_count; i++) {
             printf("%ld", embed_output_dims[i]);
@@ -299,13 +299,13 @@ static void try_make_embeddings(oww_handle* h, int newly_added_frames){
     // 构造 OrtValue（直接用数据拷贝到新 tensor）
     // 检查embedding模型期望的输入格式
     OrtTypeInfo* embed_input_type = nullptr;
-    A()->SessionGetInputTypeInfo(h->ort.embed, 0, &embed_input_type);
+    oww_handle::ORTCHK(A()->SessionGetInputTypeInfo(h->ort.embed, 0, &embed_input_type));
     OrtTensorTypeAndShapeInfo* embed_input_shape = nullptr;
-    A()->GetTensorTypeAndShapeInfo(embed_input_type, &embed_input_shape);
+    oww_handle::ORTCHK(A()->CastTypeInfoToTensorInfo(embed_input_type, &embed_input_shape));
     size_t embed_input_dim_count = 0;
-    A()->GetDimensionsCount(embed_input_shape, &embed_input_dim_count);
+    oww_handle::ORTCHK(A()->GetDimensionsCount(embed_input_shape, &embed_input_dim_count));
     std::vector<int64_t> embed_input_dims(embed_input_dim_count);
-    A()->GetDimensions(embed_input_shape, embed_input_dims.data(), embed_input_dim_count);
+    oww_handle::ORTCHK(A()->GetDimensions(embed_input_shape, embed_input_dims.data(), embed_input_dim_count));
     
     // 判断输入格式：NCHW vs NHWC
     bool is_nchw = (embed_input_dim_count >= 4 && embed_input_dims[1] == 1);
