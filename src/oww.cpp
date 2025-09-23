@@ -217,9 +217,9 @@ oww_handle* oww_create(const char* melspec_onnx,
         printf("]\n");
         
         // 释放资源
-        A()->ReleaseTensorTypeAndShapeInfo(embed_input_shape);
+        A()->ReleaseTensorTypeAndShapeInfo(const_cast<OrtTensorTypeAndShapeInfo*>(embed_input_shape));
         A()->ReleaseTypeInfo(embed_input_type);
-        A()->ReleaseTensorTypeAndShapeInfo(embed_output_shape);
+        A()->ReleaseTensorTypeAndShapeInfo(const_cast<OrtTensorTypeAndShapeInfo*>(embed_output_shape));
         A()->ReleaseTypeInfo(embed_output_type);
 
   h->threshold = threshold;
@@ -336,7 +336,7 @@ static void try_make_embeddings(oww_handle* h, int newly_added_frames){
     A()->ReleaseMemoryInfo(mi);
     
     // 释放资源
-    A()->ReleaseTensorTypeAndShapeInfo(embed_input_shape);
+    A()->ReleaseTensorTypeAndShapeInfo(const_cast<OrtTensorTypeAndShapeInfo*>(embed_input_shape));
     A()->ReleaseTypeInfo(embed_input_type);
 
     const char* in_names[]={h->ort.embed_in0.c_str()}; const char* out_names[]={h->ort.embed_out0.c_str()};
