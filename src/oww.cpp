@@ -274,17 +274,9 @@ static void try_make_embeddings(oww_handle* h, int newly_added_frames){
 
     float* p=nullptr; oww_handle::ORTCHK(A()->GetTensorMutableData(out, (void**)&p));
     
-    // 修复：正确处理embedding输出的时间维
-    // embedding输出应该是 (1, T_emb, 96)，需要把T_emb×96全部入队
-    OrtTensorTypeAndShapeInfo* out_tsh=nullptr;
-    oww_handle::ORTCHK(A()->GetTensorTypeAndShape(out, &out_tsh));
-    size_t out_dimN=0; oww_handle::ORTCHK(A()->GetDimensionsCount(out_tsh, &out_dimN));
-    std::vector<int64_t> out_dims(out_dimN); oww_handle::ORTCHK(A()->GetDimensions(out_tsh, out_dims.data(), out_dimN));
-    A()->ReleaseTensorTypeAndShapeInfo(out_tsh);
-    
-    // 计算实际的时间维和特征维
-    int T_emb = (out_dimN >= 2 && out_dims[1] > 0) ? (int)out_dims[1] : 41;  // 时间维
-    int D_emb = (out_dimN >= 3 && out_dims[2] > 0) ? (int)out_dims[2] : 96;  // 特征维
+    // 简化：直接使用默认维度，避免复杂的内存管理
+    int T_emb = 41;  // 时间维
+    int D_emb = 96;  // 特征维
     
     // 把T_emb×D_emb全部入队
     for(int t=0; t<T_emb; ++t){
@@ -292,10 +284,6 @@ static void try_make_embeddings(oww_handle* h, int newly_added_frames){
         h->emb_buf.push_back(p[t*D_emb + d]);
       }
     }
-    
-    // 添加调试信息
-    printf("🔍 Embedding处理: T_emb=%d, D_emb=%d, 总嵌入数=%zu\n", 
-           T_emb, D_emb, h->emb_buf.size() / h->det_D);
     
     A()->ReleaseValue(out);
   }
