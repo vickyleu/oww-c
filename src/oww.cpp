@@ -62,6 +62,7 @@ static void get_embed_shape(oww_handle* h){
   const OrtTensorTypeAndShapeInfo* tsh=nullptr; oww_handle::ORTCHK(A()->CastTypeInfoToTensorInfo(ti, &tsh));
   size_t n=0; oww_handle::ORTCHK(A()->GetDimensionsCount(tsh, &n));
   std::vector<int64_t> d(n); oww_handle::ORTCHK(A()->GetDimensions(tsh, d.data(), n));
+  A()->ReleaseTensorTypeAndShapeInfo(const_cast<OrtTensorTypeAndShapeInfo*>(tsh));
   A()->ReleaseTypeInfo(ti);
   // 期望 [1, mel_win, mel_bins, 1] - 修复默认值
   h->mel_win  = (n>=2 && d[1]>0) ? (int)d[1] : 97;  // 改为97，匹配你的模型
@@ -73,6 +74,7 @@ static void get_det_shape(oww_handle* h){
   const OrtTensorTypeAndShapeInfo* tsh=nullptr; oww_handle::ORTCHK(A()->CastTypeInfoToTensorInfo(ti, &tsh));
   size_t n=0; oww_handle::ORTCHK(A()->GetDimensionsCount(tsh, &n));
   std::vector<int64_t> d(n); oww_handle::ORTCHK(A()->GetDimensions(tsh, d.data(), n));
+  A()->ReleaseTensorTypeAndShapeInfo(const_cast<OrtTensorTypeAndShapeInfo*>(tsh));
   A()->ReleaseTypeInfo(ti);
   // 期望 [1, det_T, det_D] - 修复默认值
   h->det_T = (n>=2 && d[1]>0) ? (int)d[1] : 41;  // 改为41，匹配你的模型
