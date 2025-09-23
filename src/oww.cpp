@@ -174,8 +174,11 @@ oww_handle* oww_create(const char* melspec_onnx,
   
   h->ort.det_out0 = ort_get_output_name(h, h->ort.det, 0);
 
-  get_embed_shape(h);
-  get_det_shape(h);
+  // 使用默认值，避免复杂的内存管理
+  h->mel_win = 97;
+  h->mel_bins = 32;
+  h->det_T = 41;
+  h->det_D = 96;
 
         // 移除调试代码，避免内存管理问题
 
