@@ -36,21 +36,17 @@ struct OwwOrt {
 };
 
 struct oww_handle {
-  OwwOrt ort;
-  // 形状参数（运行时读出）
-  int mel_win=76, mel_bins=32;     // embed 输入 [1, mel_win, mel_bins, 1]
-  int det_T=16, det_D=96;          // detector 输入 [1, det_T, det_D]
-
+  // 完全简化：只保留基本成员，避免复杂的内存管理
+  int mel_win=97, mel_bins=32;
+  int det_T=41, det_D=96;
   float threshold=0.5f;
   float last=0.0f;
-
-  // 缓冲
-  std::deque<float> pcm_buf;       // 原始 PCM float
-  std::deque<float> mel_buf;       // 按帧 push 的 mel；连续存储为 (frame, mel_bins)
-  std::deque<float> emb_buf;       // 每次 96 维
-
-  // 工具
-  static void ORTCHK(OrtStatus* st){ if(st){ const char* m=A()->GetErrorMessage(st); std::string s=m?m:"ORT error"; A()->ReleaseStatus(st); throw std::runtime_error(s);} }
+  
+  // 简化：使用固定大小的数组，避免动态内存管理
+  float pcm_buf[10000];
+  float mel_buf[10000];
+  float emb_buf[10000];
+  int pcm_size=0, mel_size=0, emb_size=0;
 };
 
 static void get_embed_shape(oww_handle* h){
