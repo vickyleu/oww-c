@@ -177,11 +177,7 @@ oww_handle* oww_create(const char* melspec_onnx,
   get_embed_shape(h);
   get_det_shape(h);
 
-        // 添加基本的OWW初始化信息
-        printf("🔍 OWW初始化完成:\n");
-        printf("   mel_win=%d, mel_bins=%d\n", h->mel_win, h->mel_bins);
-        printf("   det_T=%d, det_D=%d\n", h->det_T, h->det_D);
-        printf("   threshold=%.3f\n", threshold);
+        // 移除调试代码，避免内存管理问题
 
   h->threshold = threshold;
   return h;
