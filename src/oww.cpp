@@ -63,8 +63,8 @@ static void get_embed_shape(oww_handle* h){
   size_t n=0; oww_handle::ORTCHK(A()->GetDimensionsCount(tsh, &n));
   std::vector<int64_t> d(n); oww_handle::ORTCHK(A()->GetDimensions(tsh, d.data(), n));
   A()->ReleaseTypeInfo(ti);
-  // 期望 [1, mel_win, mel_bins, 1]
-  h->mel_win  = (n>=2 && d[1]>0) ? (int)d[1] : 76;
+  // 期望 [1, mel_win, mel_bins, 1] - 修复默认值
+  h->mel_win  = (n>=2 && d[1]>0) ? (int)d[1] : 97;  // 改为97，匹配你的模型
   h->mel_bins = (n>=3 && d[2]>0) ? (int)d[2] : 32;
 }
 
@@ -74,8 +74,8 @@ static void get_det_shape(oww_handle* h){
   size_t n=0; oww_handle::ORTCHK(A()->GetDimensionsCount(tsh, &n));
   std::vector<int64_t> d(n); oww_handle::ORTCHK(A()->GetDimensions(tsh, d.data(), n));
   A()->ReleaseTypeInfo(ti);
-  // 期望 [1, det_T, det_D]
-  h->det_T = (n>=2 && d[1]>0) ? (int)d[1] : 16;
+  // 期望 [1, det_T, det_D] - 修复默认值
+  h->det_T = (n>=2 && d[1]>0) ? (int)d[1] : 41;  // 改为41，匹配你的模型
   h->det_D = (n>=3 && d[2]>0) ? (int)d[2] : 96;
 }
 
@@ -175,6 +175,12 @@ oww_handle* oww_create(const char* melspec_onnx,
   get_embed_shape(h);
   get_det_shape(h);
 
+  // 添加调试信息
+  printf("🔍 OWW初始化完成:\n");
+  printf("   mel_win=%d, mel_bins=%d\n", h->mel_win, h->mel_bins);
+  printf("   det_T=%d, det_D=%d\n", h->det_T, h->det_D);
+  printf("   threshold=%.3f\n", threshold);
+
   h->threshold = threshold;
   return h;
 }
@@ -197,8 +203,8 @@ static OrtValue* make_tensor_f32(const float* data, size_t count){
   return v;
 }
 
-// 调 melspectrogram.onnx -> 输出形状推断并做 (x/10+2) 归一化
-static void run_mels(oww_handle* h, const float* chunk, size_t n){
+// 调 melspectrogram.onnx -> 输出形状推断并返回实际帧数
+static int run_mels(oww_handle* h, const float* chunk, size_t n){
   OrtValue* in = make_tensor_f32(chunk, n);
   const char* in_names[]  = {h->ort.mels_in0.c_str()};
   const char* out_names[] = {h->ort.mels_out0.c_str()};
@@ -221,11 +227,14 @@ static void run_mels(oww_handle* h, const float* chunk, size_t n){
   for(int f=0; f<frames; ++f){
     for(int b=0; b<h->mel_bins; ++b){
       float v = p[f*h->mel_bins + b];
-      // 按 OWW 预处理缩放：value/10 + 2
-      h->mel_buf.push_back(v/10.0f + 2.0f);
+      // 修复：去掉v/10+2缩放，直接使用原始值
+      h->mel_buf.push_back(v);
     }
   }
   A()->ReleaseValue(out);
+  
+  // 返回实际产生的帧数
+  return frames;
 }
 
 // 从 mel_buf 尽可能提取嵌入（滑窗步长=按新进帧数）
@@ -259,8 +268,30 @@ static void try_make_embeddings(oww_handle* h, int newly_added_frames){
     A()->ReleaseValue(in);
 
     float* p=nullptr; oww_handle::ORTCHK(A()->GetTensorMutableData(out, (void**)&p));
-    // 期望输出 96 维
-    for(int i=0;i<h->det_D;i++) h->emb_buf.push_back(p[i]);
+    
+    // 修复：正确处理embedding输出的时间维
+    // embedding输出应该是 (1, T_emb, 96)，需要把T_emb×96全部入队
+    OrtTensorTypeAndShapeInfo* out_tsh=nullptr;
+    oww_handle::ORTCHK(A()->GetTensorTypeAndShape(out, &out_tsh));
+    size_t out_dimN=0; oww_handle::ORTCHK(A()->GetDimensionsCount(out_tsh, &out_dimN));
+    std::vector<int64_t> out_dims(out_dimN); oww_handle::ORTCHK(A()->GetDimensions(out_tsh, out_dims.data(), out_dimN));
+    A()->ReleaseTensorTypeAndShapeInfo(out_tsh);
+    
+    // 计算实际的时间维和特征维
+    int T_emb = (out_dimN >= 2 && out_dims[1] > 0) ? (int)out_dims[1] : 41;  // 时间维
+    int D_emb = (out_dimN >= 3 && out_dims[2] > 0) ? (int)out_dims[2] : 96;  // 特征维
+    
+    // 把T_emb×D_emb全部入队
+    for(int t=0; t<T_emb; ++t){
+      for(int d=0; d<D_emb; ++d){
+        h->emb_buf.push_back(p[t*D_emb + d]);
+      }
+    }
+    
+    // 添加调试信息
+    printf("🔍 Embedding处理: T_emb=%d, D_emb=%d, 总嵌入数=%zu\n", 
+           T_emb, D_emb, h->emb_buf.size() / h->det_D);
+    
     A()->ReleaseValue(out);
   }
   // 控制 mel_buf 大小：只保留最近 mel_win+64 帧，避免无限增长
@@ -302,6 +333,11 @@ static int try_detect(oww_handle* h){
 
   float* p=nullptr; oww_handle::ORTCHK(A()->GetTensorMutableData(out, (void**)&p));
   h->last = p[0];
+  
+  // 添加调试信息
+  printf("🔍 检测器推理: score=%.4f, threshold=%.3f, 嵌入帧数=%d\n", 
+         h->last, h->threshold, emb_n);
+  
   A()->ReleaseValue(out);
   return (h->last >= h->threshold) ? 1 : 0;
 }
@@ -312,12 +348,9 @@ static int feed_pcm(oww_handle* h, const float* pcm, size_t samples){
   size_t off=0, fired=0;
   while(off < samples){
     size_t n = std::min(step, samples-off);
-    run_mels(h, pcm+off, n);
-    // 估算新加入了多少帧：按输出总 mel size 变化估计更复杂，这里近似为 n/256*? ——直接按 embed 生成结果来推进
-    // 简化：每次按 mels 输出后尝试最大化生成嵌入
-    // 由于我们不知道确切帧数，这里用一个保守上限：假定本次至少产生了 (int)(n/256) 帧
-    int guess_new_frames = (int)(n / 256); if(guess_new_frames < 1) guess_new_frames = 1;
-    try_make_embeddings(h, guess_new_frames);
+    // 修复：使用实际的mel输出帧数，而不是n/256估算
+    int actual_frames = run_mels(h, pcm+off, n);
+    try_make_embeddings(h, actual_frames);
     fired |= try_detect(h);
     off += n;
   }
