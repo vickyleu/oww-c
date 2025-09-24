@@ -141,6 +141,7 @@ oww_handle* oww_create(const char* melspec_onnx,
                        const char* detector_onnx,
                        int threads,
                        float threshold){
+  printf("⏰ [2025-09-24 21:45:30] OWW库版本确认：最新代码已生效！\n");
   printf("🔍 开始创建oww_handle...\n");
   
   auto h = new oww_handle();
