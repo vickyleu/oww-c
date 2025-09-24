@@ -42,8 +42,8 @@ struct OwwOrt {
 struct oww_handle {
   OwwOrt ort;
   // 形状参数（运行时读出）
-  int mel_win=76, mel_bins=32;     // embed 输入 [1, mel_win, mel_bins, 1]
-  int det_T=16, det_D=96;          // detector 输入 [1, det_T, det_D]
+  int mel_win=97, mel_bins=32;     // embed 输入 [1, mel_win, mel_bins, 1]
+  int det_T=41, det_D=96;          // detector 输入 [1, det_T, det_D]
 
   float threshold=0.5f;
   float last=0.0f;
@@ -64,7 +64,7 @@ static void get_embed_shape(oww_handle* h){
   std::vector<int64_t> d(n); oww_handle::ORTCHK(A()->GetDimensions(tsh, d.data(), n));
   A()->ReleaseTypeInfo(ti);
   // 期望 [1, mel_win, mel_bins, 1]
-  h->mel_win  = (n>=2 && d[1]>0) ? (int)d[1] : 76;
+  h->mel_win  = (n>=2 && d[1]>0) ? (int)d[1] : 97;
   h->mel_bins = (n>=3 && d[2]>0) ? (int)d[2] : 32;
 }
 
@@ -75,7 +75,7 @@ static void get_det_shape(oww_handle* h){
   std::vector<int64_t> d(n); oww_handle::ORTCHK(A()->GetDimensions(tsh, d.data(), n));
   A()->ReleaseTypeInfo(ti);
   // 期望 [1, det_T, det_D]
-  h->det_T = (n>=2 && d[1]>0) ? (int)d[1] : 16;
+  h->det_T = (n>=2 && d[1]>0) ? (int)d[1] : 41;
   h->det_D = (n>=3 && d[2]>0) ? (int)d[2] : 96;
 }
 
