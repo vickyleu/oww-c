@@ -215,6 +215,8 @@ static OrtValue* make_tensor_f32(const float* data, size_t count){
 
 // 调 melspectrogram.onnx -> 输出形状推断并做 (x/10+2) 归一化
 static void run_mels(oww_handle* h, const float* chunk, size_t n){
+  printf("🔍 MEL处理开始: 输入样本数=%zu\n", n);
+  
   OrtValue* in = make_tensor_f32(chunk, n);
   const char* in_names[]  = {h->ort.mels_in0.c_str()};
   const char* out_names[] = {h->ort.mels_out0.c_str()};
@@ -229,11 +231,27 @@ static void run_mels(oww_handle* h, const float* chunk, size_t n){
   std::vector<int64_t> dims(dimN); oww_handle::ORTCHK(A()->GetDimensions(tsh, dims.data(), dimN));
   A()->ReleaseTensorTypeAndShapeInfo(tsh);
 
+  printf("🔍 MEL输出维度: [");
+  for(size_t i=0; i<dimN; ++i) {
+    printf("%lld", dims[i]);
+    if(i<dimN-1) printf(", ");
+  }
+  printf("]\n");
+
   float* p=nullptr; oww_handle::ORTCHK(A()->GetTensorMutableData(out, (void**)&p));
   size_t total = 1; for(auto d:dims) total *= (size_t)(d>0?d:1);
 
   // 约定输出形如 [1, frames, mel_bins] 或 [frames, mel_bins]
   int frames = (int)(total / std::max(1, h->mel_bins));
+  printf("🔍 MEL计算: total=%zu, mel_bins=%d, frames=%d\n", total, h->mel_bins, frames);
+  
+  // 检查前几个值
+  printf("🔍 MEL原始值前5个: ");
+  for(int i=0; i<std::min(5, (int)total); ++i) {
+    printf("%.3f ", p[i]);
+  }
+  printf("\n");
+  
   for(int f=0; f<frames; ++f){
     for(int b=0; b<h->mel_bins; ++b){
       float v = p[f*h->mel_bins + b];
@@ -241,6 +259,8 @@ static void run_mels(oww_handle* h, const float* chunk, size_t n){
       h->mel_buf.push_back(v/10.0f + 2.0f);
     }
   }
+  
+  printf("🔍 MEL处理完成: 新增%d帧, mel_buf总大小=%zu\n", frames, h->mel_buf.size());
   A()->ReleaseValue(out);
 }
 
@@ -252,16 +272,27 @@ static void try_make_embeddings(oww_handle* h, int newly_added_frames){
   int can_emit = std::max(0, frames - h->mel_win + 1);
   int emit = std::min(can_emit, newly_added_frames); // 每进多少帧就前进多少步
 
+  printf("🔍 Embedding处理: newly_added_frames=%d, total_frames=%d, can_emit=%d, emit=%d\n", 
+         newly_added_frames, frames, can_emit, emit);
+  printf("🔍 Embedding参数: mel_win=%d, mel_bins=%d, mel_buf_size=%zu\n", 
+         h->mel_win, h->mel_bins, h->mel_buf.size());
+
   for(int e=0; e<emit; ++e){
     // 取最后 mel_win 帧里倒数第(emit-e)个窗口
     int start_frame = frames - h->mel_win - (emit-1-e);
     if(start_frame < 0) continue;
+    
+    printf("🔍 Embedding窗口%d: start_frame=%d, mel_win=%d\n", e, start_frame, h->mel_win);
+    
     // 组装 [1, mel_win, mel_bins, 1]
     std::vector<float> win; win.reserve(h->mel_win*h->mel_bins);
     for(int f=0; f<h->mel_win; ++f){
       int idx = (start_frame+f)*h->mel_bins;
       for(int b=0; b<h->mel_bins; ++b) win.push_back(h->mel_buf[idx+b]);
     }
+    
+    printf("🔍 Embedding输入: 窗口大小=%zu, 预期大小=%d\n", win.size(), h->mel_win*h->mel_bins);
+    
     // 构造 OrtValue（直接用数据拷贝到新 tensor）
     OrtMemoryInfo* mi=nullptr; oww_handle::ORTCHK(A()->CreateCpuMemoryInfo(OrtArenaAllocator, OrtMemTypeDefault, &mi));
     OrtValue* in=nullptr;
@@ -274,7 +305,30 @@ static void try_make_embeddings(oww_handle* h, int newly_added_frames){
     OrtValue* out=nullptr; oww_handle::ORTCHK(A()->Run(h->ort.embed, nullptr, in_names, (const OrtValue* const*)&in, 1, out_names, 1, &out));
     A()->ReleaseValue(in);
 
+    // 读取embedding输出维度
+    OrtTensorTypeAndShapeInfo* tsh=nullptr;
+    oww_handle::ORTCHK(A()->GetTensorTypeAndShape(out, &tsh));
+    size_t dimN=0; oww_handle::ORTCHK(A()->GetDimensionsCount(tsh, &dimN));
+    std::vector<int64_t> dims(dimN); oww_handle::ORTCHK(A()->GetDimensions(tsh, dims.data(), dimN));
+    A()->ReleaseTensorTypeAndShapeInfo(tsh);
+
+    printf("🔍 Embedding输出维度: [");
+    for(size_t i=0; i<dimN; ++i) {
+      printf("%lld", dims[i]);
+      if(i<dimN-1) printf(", ");
+    }
+    printf("]\n");
+
     float* p=nullptr; oww_handle::ORTCHK(A()->GetTensorMutableData(out, (void**)&p));
+    size_t total_out = 1; for(auto d:dims) total_out *= (size_t)(d>0?d:1);
+    
+    printf("🔍 Embedding输出: total_size=%zu, det_D=%d\n", total_out, h->det_D);
+    printf("🔍 Embedding前5个值: ");
+    for(int i=0; i<std::min(5, (int)total_out); ++i) {
+      printf("%.6f ", p[i]);
+    }
+    printf("\n");
+    
     // 期望输出 96 维
     for(int i=0;i<h->det_D;i++) h->emb_buf.push_back(p[i]);
     A()->ReleaseValue(out);
@@ -297,7 +351,13 @@ static void try_make_embeddings(oww_handle* h, int newly_added_frames){
 
 static int try_detect(oww_handle* h){
   int emb_n = (int)h->emb_buf.size() / h->det_D;
-  if(emb_n < h->det_T) return 0;
+  printf("🔍 Detector处理: emb_n=%d, det_T=%d, det_D=%d, emb_buf_size=%zu\n", 
+         emb_n, h->det_T, h->det_D, h->emb_buf.size());
+  
+  if(emb_n < h->det_T) {
+    printf("🔍 Detector: 嵌入数量不足(%d < %d)，跳过检测\n", emb_n, h->det_T);
+    return 0;
+  }
 
   // 取最后 det_T 个嵌入 => [1, det_T, det_D]
   std::vector<float> x; x.reserve(h->det_T*h->det_D);
@@ -305,6 +365,13 @@ static int try_detect(oww_handle* h){
     int base = t*h->det_D;
     for(int d=0; d<h->det_D; ++d) x.push_back(h->emb_buf[base+d]);
   }
+  
+  printf("🔍 Detector输入: 形状[1,%d,%d], 数据大小=%zu\n", h->det_T, h->det_D, x.size());
+  printf("🔍 Detector输入前5个值: ");
+  for(int i=0; i<std::min(5, (int)x.size()); ++i) {
+    printf("%.6f ", x[i]);
+  }
+  printf("\n");
 
   OrtMemoryInfo* mi=nullptr; oww_handle::ORTCHK(A()->CreateCpuMemoryInfo(OrtArenaAllocator, OrtMemTypeDefault, &mi));
   OrtValue* in=nullptr;
@@ -316,8 +383,26 @@ static int try_detect(oww_handle* h){
   OrtValue* out=nullptr; oww_handle::ORTCHK(A()->Run(h->ort.det, nullptr, in_names, (const OrtValue* const*)&in, 1, out_names, 1, &out));
   A()->ReleaseValue(in);
 
+  // 读取detector输出维度
+  OrtTensorTypeAndShapeInfo* tsh=nullptr;
+  oww_handle::ORTCHK(A()->GetTensorTypeAndShape(out, &tsh));
+  size_t dimN=0; oww_handle::ORTCHK(A()->GetDimensionsCount(tsh, &dimN));
+  std::vector<int64_t> dims(dimN); oww_handle::ORTCHK(A()->GetDimensions(tsh, dims.data(), dimN));
+  A()->ReleaseTensorTypeAndShapeInfo(tsh);
+
+  printf("🔍 Detector输出维度: [");
+  for(size_t i=0; i<dimN; ++i) {
+    printf("%lld", dims[i]);
+    if(i<dimN-1) printf(", ");
+  }
+  printf("]\n");
+
   float* p=nullptr; oww_handle::ORTCHK(A()->GetTensorMutableData(out, (void**)&p));
   h->last = p[0];
+  
+  printf("🔍 Detector最终输出: score=%.6f, 阈值=%.3f, 结果=%s\n", 
+         h->last, h->threshold, (h->last >= h->threshold) ? "触发" : "未触发");
+  
   A()->ReleaseValue(out);
   return (h->last >= h->threshold) ? 1 : 0;
 }
