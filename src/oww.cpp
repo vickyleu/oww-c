@@ -45,6 +45,7 @@ struct oww_handle {
   int mel_win=97, mel_bins=32;     // embed 输入 [1, mel_win, mel_bins, 1]
   int det_T=41, det_D=96;          // detector 输入 [1, det_T, det_D]
 
+  bool two_chain_mode=false;       // 是否使用两链模式（mel+detector）
   float threshold=0.5f;
   float last=0.0f;
 
@@ -141,7 +142,7 @@ oww_handle* oww_create(const char* melspec_onnx,
                        const char* detector_onnx,
                        int threads,
                        float threshold){
-  printf("⏰ [2025-09-24 21:45:30] OWW库版本确认：最新代码已生效！\n");
+  printf("⏰ [2025-09-24 22:15:00] OWW库版本确认：修复为两链架构！\n");
   printf("🔍 开始创建oww_handle...\n");
   
   auto h = new oww_handle();
@@ -170,28 +171,46 @@ oww_handle* oww_create(const char* melspec_onnx,
   oww_handle::ORTCHK(A()->GetAllocatorWithDefaultOptions(&h->ort.alloc));
   printf("✅ 默认分配器获取成功\n");
 
-  // load three sessions
-  printf("🔍 准备加载MEL模型...\n");
-  h->ort.mels  = load_session(h->ort.env, h->ort.so, melspec_onnx);
-  
-  printf("🔍 准备加载EMBED模型...\n");
-  h->ort.embed = load_session(h->ort.env, h->ort.so, embed_onnx);
-  
-  printf("🔍 准备加载DET模型...\n");
-  h->ort.det   = load_session(h->ort.env, h->ort.so, detector_onnx);
+  // 检查embed_onnx是否为空，决定是两链还是三链
+  bool use_two_chain = (!embed_onnx || strlen(embed_onnx) == 0);
+  printf("🔍 检测到架构模式: %s\n", use_two_chain ? "两链(MEL+DETECTOR)" : "三链(MEL+EMBED+DETECTOR)");
 
-  // 使用固定名称避免API调用导致的内存问题
-  printf("🔍 设置输入输出名称...\n");
-  h->ort.mels_in0 = "input";
-  h->ort.mels_out0 = "output"; 
-  h->ort.embed_in0 = "input";
-  h->ort.embed_out0 = "output";
-  h->ort.det_in0 = "input";
-  h->ort.det_out0 = "output";
-  printf("✅ 输入输出名称设置完成\n");
+  printf("🔍 准备加载MEL模型...\n");
+  h->ort.mels = load_session(h->ort.env, h->ort.so, melspec_onnx);
+  
+  printf("🔍 准备加载DETECTOR模型...\n");
+  h->ort.det = load_session(h->ort.env, h->ort.so, detector_onnx);
+
+  if (use_two_chain) {
+    printf("🔍 使用两链架构，跳过EMBED模型\n");
+    h->ort.embed = nullptr;
+    h->two_chain_mode = true;
+  } else {
+    printf("🔍 准备加载EMBED模型...\n");
+    h->ort.embed = load_session(h->ort.env, h->ort.so, embed_onnx);
+    h->two_chain_mode = false;
+  }
+
+  printf("🔍 获取输入输出名称...\n");
+  h->ort.mels_in0 = ort_get_input_name(h, h->ort.mels, 0);
+  h->ort.mels_out0 = ort_get_output_name(h, h->ort.mels, 0);
+  h->ort.det_in0 = ort_get_input_name(h, h->ort.det, 0);
+  h->ort.det_out0 = ort_get_output_name(h, h->ort.det, 0);
+
+  if (!use_two_chain) {
+    h->ort.embed_in0 = ort_get_input_name(h, h->ort.embed, 0);
+    h->ort.embed_out0 = ort_get_output_name(h, h->ort.embed, 0);
+  }
+
+  printf("✅ 输入输出名称获取完成\n");
+  printf("   MEL: %s -> %s\n", h->ort.mels_in0.c_str(), h->ort.mels_out0.c_str());
+  if (!use_two_chain) {
+    printf("   EMBED: %s -> %s\n", h->ort.embed_in0.c_str(), h->ort.embed_out0.c_str());
+  }
+  printf("   DETECTOR: %s -> %s\n", h->ort.det_in0.c_str(), h->ort.det_out0.c_str());
 
   h->threshold = threshold;
-  printf("✅ oww_create完成，阈值: %.3f\n", threshold);
+  printf("✅ oww_create完成，阈值: %.3f，模式: %s\n", threshold, use_two_chain ? "两链" : "三链");
   return h;
 }
 
@@ -349,6 +368,76 @@ static void try_make_embeddings(oww_handle* h, int newly_added_frames){
   }
 }
 
+// 两链模式：直接从mel特征到detector
+static int try_detect_two_chain(oww_handle* h){
+  int mel_frames = (int)h->mel_buf.size() / h->mel_bins;
+  printf("🔍 TwoChain Detector处理: mel_frames=%d, 需要frames>=36\n", mel_frames);
+  
+  if(mel_frames < 36) {
+    printf("🔍 TwoChain: mel帧数不足(%d < 36)，跳过检测\n", mel_frames);
+    return 0;
+  }
+
+  // 参考oww_simple.py: mel4: [1,1,96,32] -> [1,36,96]
+  // 我们的mel_buf是按(frame, mel_bins)存储，即每帧32维
+  
+  // 取最后36帧: mel_buf[(mel_frames-36)*32 : mel_frames*32]
+  std::vector<float> mel_36_frames;
+  mel_36_frames.reserve(36 * 32);
+  
+  int start_frame = mel_frames - 36;
+  for(int f = 0; f < 36; f++) {
+    int frame_idx = start_frame + f;
+    int base = frame_idx * h->mel_bins;
+    for(int b = 0; b < h->mel_bins; b++) {
+      mel_36_frames.push_back(h->mel_buf[base + b]);
+    }
+  }
+  
+  // 转换为[1,36,96]: 每帧32维重复3次变成96维
+  std::vector<float> detector_input;
+  detector_input.reserve(36 * 96);
+  
+  for(int f = 0; f < 36; f++) {
+    for(int repeat = 0; repeat < 3; repeat++) {
+      for(int b = 0; b < 32; b++) {
+        detector_input.push_back(mel_36_frames[f * 32 + b]);
+      }
+    }
+  }
+  
+  printf("🔍 TwoChain输入: 形状[1,36,96], 数据大小=%zu\n", detector_input.size());
+  printf("🔍 TwoChain输入前5个值: ");
+  for(int i=0; i<std::min(5, (int)detector_input.size()); ++i) {
+    printf("%.6f ", detector_input[i]);
+  }
+  printf("\n");
+
+  // 执行推理
+  OrtMemoryInfo* mi=nullptr; oww_handle::ORTCHK(A()->CreateCpuMemoryInfo(OrtArenaAllocator, OrtMemTypeDefault, &mi));
+  OrtValue* in=nullptr;
+  int64_t shape[3] = {1, 36, 96};
+  oww_handle::ORTCHK(A()->CreateTensorWithDataAsOrtValue(mi, detector_input.data(), detector_input.size()*sizeof(float),
+                                                         shape, 3, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, &in));
+  A()->ReleaseMemoryInfo(mi);
+  
+  const char* in_names[]={h->ort.det_in0.c_str()}; 
+  const char* out_names[]={h->ort.det_out0.c_str()};
+  OrtValue* out=nullptr; 
+  oww_handle::ORTCHK(A()->Run(h->ort.det, nullptr, in_names, (const OrtValue* const*)&in, 1, out_names, 1, &out));
+  A()->ReleaseValue(in);
+
+  // 读取输出
+  float* p=nullptr; oww_handle::ORTCHK(A()->GetTensorMutableData(out, (void**)&p));
+  h->last = p[0];
+  
+  printf("🔍 TwoChain最终输出: score=%.6f, 阈值=%.3f, 结果=%s\n", 
+         h->last, h->threshold, (h->last >= h->threshold) ? "触发" : "未触发");
+  
+  A()->ReleaseValue(out);
+  return (h->last >= h->threshold) ? 1 : 0;
+}
+
 static int try_detect(oww_handle* h){
   int emb_n = (int)h->emb_buf.size() / h->det_D;
   printf("🔍 Detector处理: emb_n=%d, det_T=%d, det_D=%d, emb_buf_size=%zu\n", 
@@ -414,12 +503,16 @@ static int feed_pcm(oww_handle* h, const float* pcm, size_t samples){
   while(off < samples){
     size_t n = std::min(step, samples-off);
     run_mels(h, pcm+off, n);
-    // 估算新加入了多少帧：按输出总 mel size 变化估计更复杂，这里近似为 n/256*? ——直接按 embed 生成结果来推进
-    // 简化：每次按 mels 输出后尝试最大化生成嵌入
-    // 由于我们不知道确切帧数，这里用一个保守上限：假定本次至少产生了 (int)(n/256) 帧
-    int guess_new_frames = (int)(n / 256); if(guess_new_frames < 1) guess_new_frames = 1;
-    try_make_embeddings(h, guess_new_frames);
-    fired |= try_detect(h);
+    
+    if (h->two_chain_mode) {
+      // 两链模式：mel → detector
+      fired |= try_detect_two_chain(h);
+    } else {
+      // 三链模式：mel → embedding → detector
+      int guess_new_frames = (int)(n / 256); if(guess_new_frames < 1) guess_new_frames = 1;
+      try_make_embeddings(h, guess_new_frames);
+      fired |= try_detect(h);
+    }
     off += n;
   }
   return fired ? 1 : 0;
