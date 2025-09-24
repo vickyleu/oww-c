@@ -150,19 +150,13 @@ oww_handle* oww_create(const char* melspec_onnx,
   
   h->ort.det   = load_session(h->ort.env, h->ort.so, detector_onnx);
 
-  // 获取输入和输出名称
-  
-  h->ort.mels_in0 = ort_get_input_name(h, h->ort.mels, 0);
-  
-  h->ort.mels_out0 = ort_get_output_name(h, h->ort.mels, 0);
-  
-  h->ort.embed_in0 = ort_get_input_name(h, h->ort.embed, 0);
-  
-  h->ort.embed_out0 = ort_get_output_name(h, h->ort.embed, 0);
-  
-  h->ort.det_in0 = ort_get_input_name(h, h->ort.det, 0);
-  
-  h->ort.det_out0 = ort_get_output_name(h, h->ort.det, 0);
+  // 使用固定名称避免API调用导致的内存问题
+  h->ort.mels_in0 = "input";
+  h->ort.mels_out0 = "output"; 
+  h->ort.embed_in0 = "input";
+  h->ort.embed_out0 = "output";
+  h->ort.det_in0 = "input";
+  h->ort.det_out0 = "output";
 
   // get_embed_shape(h);  // 使用固定值，避免内存问题
   // get_det_shape(h);    // 使用固定值，避免内存问题
