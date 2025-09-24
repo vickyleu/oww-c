@@ -72,7 +72,20 @@ static void get_det_shape(oww_handle* h){
 }
 
 static OrtSession* load_session(OrtEnv* env, OrtSessionOptions* so, const char* path){
-  OrtSession* s=nullptr; oww_handle::ORTCHK(A()->CreateSession(env, path, so, &s)); return s;
+  if (!path || strlen(path) == 0) {
+    throw std::runtime_error("Model path is empty");
+  }
+  printf("🔍 正在加载ONNX模型: %s\n", path);
+  OrtSession* s=nullptr; 
+  OrtStatus* status = A()->CreateSession(env, path, so, &s);
+  if (status != nullptr) {
+    const char* error_msg = A()->GetErrorMessage(status);
+    printf("❌ CreateSession失败: %s\n", error_msg);
+    A()->ReleaseStatus(status);
+    throw std::runtime_error("CreateSession failed");
+  }
+  printf("✅ 模型加载成功: %s\n", path);
+  return s;
 }
 
 static std::string ort_get_input_name(oww_handle* h, OrtSession* sess, size_t index){
