@@ -1,5 +1,5 @@
 #include "oww.h"
-#include <onnxruntime_c_api.h>
+#include <onnxruntime/core/session/onnxruntime_c_api.h>
 #include <cstring>
 #include <vector>
 #include <deque>
