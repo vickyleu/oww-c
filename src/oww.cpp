@@ -41,7 +41,7 @@ struct OwwOrt {
 
 struct oww_handle {
   OwwOrt ort;
-  // 形状参数（运行时读出）
+  // 形状参数（固定值）
   int mel_win=97, mel_bins=32;     // embed 输入 [1, mel_win, mel_bins, 1]
   int det_T=41, det_D=96;          // detector 输入 [1, det_T, det_D]
 
@@ -164,8 +164,8 @@ oww_handle* oww_create(const char* melspec_onnx,
   
   h->ort.det_out0 = ort_get_output_name(h, h->ort.det, 0);
 
-  get_embed_shape(h);
-  get_det_shape(h);
+  // get_embed_shape(h);  // 使用固定值，避免内存问题
+  // get_det_shape(h);    // 使用固定值，避免内存问题
 
   h->threshold = threshold;
   return h;
