@@ -58,25 +58,17 @@ struct oww_handle {
 };
 
 static void get_embed_shape(oww_handle* h){
-  OrtTypeInfo* ti=nullptr; oww_handle::ORTCHK(A()->SessionGetInputTypeInfo(h->ort.embed, 0, &ti));
-  const OrtTensorTypeAndShapeInfo* tsh=nullptr; oww_handle::ORTCHK(A()->CastTypeInfoToTensorInfo(ti, &tsh));
-  size_t n=0; oww_handle::ORTCHK(A()->GetDimensionsCount(tsh, &n));
-  std::vector<int64_t> d(n); oww_handle::ORTCHK(A()->GetDimensions(tsh, d.data(), n));
-  A()->ReleaseTypeInfo(ti);
-  // 期望 [1, mel_win, mel_bins, 1]
-  h->mel_win  = (n>=2 && d[1]>0) ? (int)d[1] : 97;
-  h->mel_bins = (n>=3 && d[2]>0) ? (int)d[2] : 32;
+  // 直接使用固定值，避免内存管理问题
+  h->mel_win = 97;
+  h->mel_bins = 32;
+  printf("🔍 使用固定embed形状: mel_win=%d, mel_bins=%d\n", h->mel_win, h->mel_bins);
 }
 
 static void get_det_shape(oww_handle* h){
-  OrtTypeInfo* ti=nullptr; oww_handle::ORTCHK(A()->SessionGetInputTypeInfo(h->ort.det, 0, &ti));
-  const OrtTensorTypeAndShapeInfo* tsh=nullptr; oww_handle::ORTCHK(A()->CastTypeInfoToTensorInfo(ti, &tsh));
-  size_t n=0; oww_handle::ORTCHK(A()->GetDimensionsCount(tsh, &n));
-  std::vector<int64_t> d(n); oww_handle::ORTCHK(A()->GetDimensions(tsh, d.data(), n));
-  A()->ReleaseTypeInfo(ti);
-  // 期望 [1, det_T, det_D]
-  h->det_T = (n>=2 && d[1]>0) ? (int)d[1] : 41;
-  h->det_D = (n>=3 && d[2]>0) ? (int)d[2] : 96;
+  // 直接使用固定值，避免内存管理问题
+  h->det_T = 41;
+  h->det_D = 96;
+  printf("🔍 使用固定detector形状: det_T=%d, det_D=%d\n", h->det_T, h->det_D);
 }
 
 static OrtSession* load_session(OrtEnv* env, OrtSessionOptions* so, const char* path){
