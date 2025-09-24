@@ -6,7 +6,7 @@ extern "C" {
 
 typedef struct oww_handle oww_handle;
 
-/** 三段式：melspectrogram.onnx + embedding_model.onnx + 某个 wakeword_xxx.onnx */
+/** 两段式：melspectrogram.onnx + wakeword_detector.onnx（embed_onnx参数保留兼容性但不使用） */
 oww_handle* oww_create(const char* melspec_onnx,
                        const char* embed_onnx,
                        const char* detector_onnx,
