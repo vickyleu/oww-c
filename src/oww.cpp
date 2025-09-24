@@ -141,40 +141,56 @@ oww_handle* oww_create(const char* melspec_onnx,
                        const char* detector_onnx,
                        int threads,
                        float threshold){
-  // 移除崩溃测试，使用正常的初始化流程
-  
-  // 初始化OpenWakeWord
+  printf("🔍 开始创建oww_handle...\n");
   
   auto h = new oww_handle();
+  printf("✅ oww_handle创建成功\n");
   
   // ORT init
+  printf("🔍 初始化ONNX Runtime环境...\n");
   oww_handle::ORTCHK(A()->CreateEnv(ORT_LOGGING_LEVEL_WARNING, "oww", &h->ort.env));
+  printf("✅ ONNX Runtime环境创建成功\n");
+  
+  printf("🔍 创建Session选项...\n");
   oww_handle::ORTCHK(A()->CreateSessionOptions(&h->ort.so));
+  printf("✅ Session选项创建成功\n");
+  
+  printf("🔍 设置线程数: %d\n", threads);
   oww_handle::ORTCHK(A()->SetIntraOpNumThreads(h->ort.so, threads));
+  printf("✅ 线程数设置成功\n");
+  
 #if ORT_API_VERSION >= 12
+  printf("🔍 设置图优化级别...\n");
   oww_handle::ORTCHK(A()->SetSessionGraphOptimizationLevel(h->ort.so, ORT_ENABLE_BASIC));
+  printf("✅ 图优化级别设置成功\n");
 #endif
+  
+  printf("🔍 获取默认分配器...\n");
   oww_handle::ORTCHK(A()->GetAllocatorWithDefaultOptions(&h->ort.alloc));
+  printf("✅ 默认分配器获取成功\n");
 
   // load three sessions
+  printf("🔍 准备加载MEL模型...\n");
   h->ort.mels  = load_session(h->ort.env, h->ort.so, melspec_onnx);
   
+  printf("🔍 准备加载EMBED模型...\n");
   h->ort.embed = load_session(h->ort.env, h->ort.so, embed_onnx);
   
+  printf("🔍 准备加载DET模型...\n");
   h->ort.det   = load_session(h->ort.env, h->ort.so, detector_onnx);
 
   // 使用固定名称避免API调用导致的内存问题
+  printf("🔍 设置输入输出名称...\n");
   h->ort.mels_in0 = "input";
   h->ort.mels_out0 = "output"; 
   h->ort.embed_in0 = "input";
   h->ort.embed_out0 = "output";
   h->ort.det_in0 = "input";
   h->ort.det_out0 = "output";
-
-  // get_embed_shape(h);  // 使用固定值，避免内存问题
-  // get_det_shape(h);    // 使用固定值，避免内存问题
+  printf("✅ 输入输出名称设置完成\n");
 
   h->threshold = threshold;
+  printf("✅ oww_create完成，阈值: %.3f\n", threshold);
   return h;
 }
 
