@@ -29,6 +29,30 @@ size_t oww_recommended_chunk();
 /** 销毁 */
 void oww_destroy(oww_handle* h);
 
+// ==================== 新的KWS单模型接口 ====================
+
+typedef struct kws_handle kws_handle;
+
+/** 单模型KWS：直接使用ONNX模型进行唤醒词检测 */
+kws_handle* kws_create(const char* model_path,
+                       int threads,
+                       float threshold);
+
+/** 流式喂入 PCM（16kHz，单声道，int16） */
+int kws_process_i16(kws_handle* h, const short* pcm, size_t samples);
+
+/** 重置内部缓冲 */
+void kws_reset(kws_handle* h);
+
+/** 最近一次检测分数（0..1） */
+float kws_last_score(const kws_handle* h);
+
+/** 每个输入块建议大小（样本数，10ms=160） */
+size_t kws_recommended_chunk();
+
+/** 销毁 */
+void kws_destroy(kws_handle* h);
+
 #ifdef __cplusplus
 }
 #endif

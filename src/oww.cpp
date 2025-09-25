@@ -259,3 +259,149 @@ int oww_feed_pcm_s16(oww_handle* h, const int16_t* pcm, size_t samples){
   }
   return feed_pcm(h, f32_pcm.data(), samples);
 }
+
+// ==================== 新的KWS单模型实现 ====================
+
+struct kws_handle {
+  OwwOrt ort;
+  
+  // 固定参数
+  int win = 16000;        // 1.0s窗口
+  int hop = 160;          // 10ms跳步
+  int smooth = 3;         // 滑动平均帧数
+  int cooldown_frames = 30; // 冷却帧数
+  
+  float threshold = 0.65f;
+  float last = 0.0f;
+  
+  // 环形缓冲
+  std::vector<int16_t> ring_buf;
+  std::vector<float> ma_buf;  // 滑动平均缓冲
+  int ma_idx = 0;
+  int cooldown = 0;
+  
+  // 输入输出名称
+  std::string input_name;
+  std::string output_name;
+  
+  static void ORTCHK(OrtStatus* st){ 
+    if(st){ 
+      const char* m=A()->GetErrorMessage(st); 
+      std::string s=m?m:"ORT error"; 
+      A()->ReleaseStatus(st); 
+      throw std::runtime_error(s);
+    } 
+  }
+};
+
+kws_handle* kws_create(const char* model_path, int threads, float threshold){
+  printf("🔍 KWS单模型初始化...\n");
+  
+  auto h = new kws_handle();
+  h->threshold = threshold;
+  h->ring_buf.resize(h->win, 0);
+  h->ma_buf.resize(h->smooth, 0.0f);
+  
+  // 初始化ONNX Runtime
+  kws_handle::ORTCHK(A()->CreateEnv(ORT_LOGGING_LEVEL_WARNING, "kws", &h->ort.env));
+  kws_handle::ORTCHK(A()->CreateSessionOptions(&h->ort.so));
+  kws_handle::ORTCHK(A()->SetIntraOpNumThreads(h->ort.so, threads));
+  kws_handle::ORTCHK(A()->GetAllocatorWithDefaultOptions(&h->ort.alloc));
+  
+  // 加载模型
+  h->ort.mels = load_session(h->ort.env, h->ort.so, model_path);
+  
+  // 获取输入输出名称
+  char* tmp = nullptr;
+  kws_handle::ORTCHK(A()->SessionGetInputName(h->ort.mels, 0, h->ort.alloc, &tmp));
+  h->input_name = std::string(tmp);
+  h->ort.alloc->Free(h->ort.alloc, tmp);
+  
+  kws_handle::ORTCHK(A()->SessionGetOutputName(h->ort.mels, 0, h->ort.alloc, &tmp));
+  h->output_name = std::string(tmp);
+  h->ort.alloc->Free(h->ort.alloc, tmp);
+  
+  printf("✅ KWS单模型初始化完成, 阈值: %.3f\n", threshold);
+  printf("   - 输入: %s, 输出: %s\n", h->input_name.c_str(), h->output_name.c_str());
+  return h;
+}
+
+void kws_reset(kws_handle* h){
+  std::fill(h->ring_buf.begin(), h->ring_buf.end(), 0);
+  std::fill(h->ma_buf.begin(), h->ma_buf.end(), 0.0f);
+  h->ma_idx = 0;
+  h->cooldown = 0;
+  h->last = 0.0f;
+}
+
+float kws_last_score(const kws_handle* h){
+  return h->last;
+}
+
+size_t kws_recommended_chunk(){
+  return 160; // 10ms@16k
+}
+
+void kws_destroy(kws_handle* h){
+  delete h;
+}
+
+int kws_process_i16(kws_handle* h, const short* pcm, size_t samples){
+  int fired = 0;
+  
+  for(size_t i = 0; i < samples; i += h->hop){
+    size_t hop_size = std::min((size_t)h->hop, samples - i);
+    
+    // 滑窗：右移 WIN-HOP，拷贝 HOP
+    memmove(h->ring_buf.data(), h->ring_buf.data() + h->hop, (h->win - h->hop) * sizeof(int16_t));
+    memcpy(h->ring_buf.data() + (h->win - h->hop), pcm + i, hop_size * sizeof(int16_t));
+    
+    // 创建输入张量
+    OrtMemoryInfo* mi = nullptr;
+    kws_handle::ORTCHK(A()->CreateCpuMemoryInfo(OrtArenaAllocator, OrtMemTypeDefault, &mi));
+    
+    OrtValue* input = nullptr;
+    int64_t dims[2] = {1, h->win};
+    kws_handle::ORTCHK(A()->CreateTensorWithDataAsOrtValue(mi, h->ring_buf.data(), 
+                                                          h->win * sizeof(int16_t), dims, 2, 
+                                                          ONNX_TENSOR_ELEMENT_DATA_TYPE_INT16, &input));
+    A()->ReleaseMemoryInfo(mi);
+    
+    // 推理
+    const char* input_names[] = {h->input_name.c_str()};
+    const char* output_names[] = {h->output_name.c_str()};
+    OrtValue* output = nullptr;
+    kws_handle::ORTCHK(A()->Run(h->ort.mels, nullptr, input_names, (const OrtValue* const*)&input, 1,
+                                output_names, 1, &output));
+    A()->ReleaseValue(input);
+    
+    // 获取分数
+    float* score_ptr = nullptr;
+    kws_handle::ORTCHK(A()->GetTensorMutableData(output, (void**)&score_ptr));
+    float score = score_ptr[0];
+    A()->ReleaseValue(output);
+    
+    // 滑动平均
+    h->ma_buf[h->ma_idx % h->smooth] = score;
+    h->ma_idx++;
+    
+    float avg = 0.0f;
+    for(int j = 0; j < h->smooth; j++){
+      avg += h->ma_buf[j];
+    }
+    avg /= h->smooth;
+    
+    // 冷却处理
+    if(h->cooldown > 0) h->cooldown--;
+    
+    // 触发检测
+    if(avg > h->threshold && h->cooldown == 0){
+      printf("🔍 KWS触发: score=%.3f, 平均=%.3f, 阈值=%.3f\n", score, avg, h->threshold);
+      h->last = avg;
+      h->cooldown = h->cooldown_frames;
+      fired = 1;
+    }
+  }
+  
+  return fired;
+}
