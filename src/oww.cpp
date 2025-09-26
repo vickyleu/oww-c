@@ -356,6 +356,19 @@ int kws_process_i16(kws_handle* h, const short* pcm, size_t samples){
     memmove(h->ring_buf.data(), h->ring_buf.data() + h->hop, (h->win - h->hop) * sizeof(int16_t));
     memcpy(h->ring_buf.data() + (h->win - h->hop), pcm + i, hop_size * sizeof(int16_t));
     
+    // 验证输入数据：统计新拷贝的数据
+    int16_t* new_data = h->ring_buf.data() + (h->win - h->hop);
+    int16_t max_val = 0, min_val = 0;
+    int non_zero_count = 0;
+    for(size_t j = 0; j < hop_size; j++) {
+        int16_t val = new_data[j];
+        max_val = std::max(max_val, val);
+        min_val = std::min(min_val, val);
+        if(val != 0) non_zero_count++;
+    }
+    fprintf(stderr, "KWS输入验证: max=%d min=%d 非零=%d/%zu 原始peak=%d\n", 
+            max_val, min_val, non_zero_count, hop_size, (i < samples) ? pcm[i] : 0);
+    
     // 创建输入张量
     OrtMemoryInfo* mi = nullptr;
     kws_handle::ORTCHK(A()->CreateCpuMemoryInfo(OrtArenaAllocator, OrtMemTypeDefault, &mi));
