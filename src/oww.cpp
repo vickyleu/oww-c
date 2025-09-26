@@ -435,21 +435,15 @@ int kws_process_i16(kws_handle* h, const short* pcm, size_t samples){
     fprintf(stderr, "KWS输入验证: max=%d min=%d 非零=%d/%zu 原始peak=%d\n", 
             max_val, min_val, non_zero_count, hop_size, (i < samples) ? pcm[i] : 0);
     
-    // 将INT16数据转换为FLOAT32并归一化（按照ipynb代码：x=x.float()/32768.0）
-    std::vector<float> float_data(h->win);
-    for(size_t j = 0; j < h->win; j++) {
-        float_data[j] = h->ring_buf[j] / 32768.0f;
-    }
-    
     // 创建输入张量
     OrtMemoryInfo* mi = nullptr;
     kws_handle::ORTCHK(A()->CreateCpuMemoryInfo(OrtArenaAllocator, OrtMemTypeDefault, &mi));
     
     OrtValue* input = nullptr;
     int64_t dims[2] = {1, h->win};
-    kws_handle::ORTCHK(A()->CreateTensorWithDataAsOrtValue(mi, float_data.data(), 
-                                                          h->win * sizeof(float), dims, 2, 
-                                                          ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, &input));
+    kws_handle::ORTCHK(A()->CreateTensorWithDataAsOrtValue(mi, h->ring_buf.data(), 
+                                                          h->win * sizeof(int16_t), dims, 2, 
+                                                          ONNX_TENSOR_ELEMENT_DATA_TYPE_INT16, &input));
     A()->ReleaseMemoryInfo(mi);
     
     // 推理
