@@ -337,8 +337,8 @@ kws_handle* kws_create(const char* model_path, int threads, float threshold){
   // 获取输入输出类型信息
   OrtTypeInfo* input_type_info = nullptr;
   OrtTypeInfo* output_type_info = nullptr;
-  kws_handle::ORTCHK(A()->SessionGetInputTypeInfo(h->ort.mels, 0, h->ort.alloc, &input_type_info));
-  kws_handle::ORTCHK(A()->SessionGetOutputTypeInfo(h->ort.mels, 0, h->ort.alloc, &output_type_info));
+  kws_handle::ORTCHK(A()->SessionGetInputTypeInfo(h->ort.mels, 0, &input_type_info));
+  kws_handle::ORTCHK(A()->SessionGetOutputTypeInfo(h->ort.mels, 0, &output_type_info));
   
   if (input_type_info) {
     const OrtTensorTypeAndShapeInfo* input_tensor_info = nullptr;
@@ -354,7 +354,7 @@ kws_handle* kws_create(const char* model_path, int threads, float threshold){
     
     for (size_t i = 0; i < input_dim_count; i++) {
       int64_t dim;
-      kws_handle::ORTCHK(A()->GetDimensions(input_tensor_info, &dim, 1, i));
+      kws_handle::ORTCHK(A()->GetDimensions(input_tensor_info, &dim, i));
       printf("   - 输入维度[%zu]: %ld\n", i, dim);
     }
     
@@ -375,7 +375,7 @@ kws_handle* kws_create(const char* model_path, int threads, float threshold){
     
     for (size_t i = 0; i < output_dim_count; i++) {
       int64_t dim;
-      kws_handle::ORTCHK(A()->GetDimensions(output_tensor_info, &dim, 1, i));
+      kws_handle::ORTCHK(A()->GetDimensions(output_tensor_info, &dim, i));
       printf("   - 输出维度[%zu]: %ld\n", i, dim);
     }
     
