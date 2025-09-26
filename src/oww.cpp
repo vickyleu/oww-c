@@ -322,6 +322,66 @@ kws_handle* kws_create(const char* model_path, int threads, float threshold){
   h->output_name = std::string(tmp);
   h->ort.alloc->Free(h->ort.alloc, tmp);
   
+  // 打印模型输入输出信息
+  printf("🔍 模型输入输出信息:\n");
+  printf("   - 输入名称: %s\n", h->input_name.c_str());
+  printf("   - 输出名称: %s\n", h->output_name.c_str());
+  
+  // 获取输入输出形状信息
+  size_t input_count, output_count;
+  kws_handle::ORTCHK(A()->SessionGetInputCount(h->ort.mels, &input_count));
+  kws_handle::ORTCHK(A()->SessionGetOutputCount(h->ort.mels, &output_count));
+  
+  printf("   - 输入数量: %zu, 输出数量: %zu\n", input_count, output_count);
+  
+  // 获取输入输出类型信息
+  OrtTypeInfo* input_type_info = nullptr;
+  OrtTypeInfo* output_type_info = nullptr;
+  kws_handle::ORTCHK(A()->SessionGetInputTypeInfo(h->ort.mels, 0, h->ort.alloc, &input_type_info));
+  kws_handle::ORTCHK(A()->SessionGetOutputTypeInfo(h->ort.mels, 0, h->ort.alloc, &output_type_info));
+  
+  if (input_type_info) {
+    const OrtTensorTypeAndShapeInfo* input_tensor_info = nullptr;
+    kws_handle::ORTCHK(A()->CastTypeInfoToTensorInfo(input_type_info, &input_tensor_info));
+    
+    ONNXTensorElementDataType input_type;
+    kws_handle::ORTCHK(A()->GetTensorElementType(input_tensor_info, &input_type));
+    printf("   - 输入类型: %d (INT16=%d)\n", input_type, ONNX_TENSOR_ELEMENT_DATA_TYPE_INT16);
+    
+    size_t input_dim_count;
+    kws_handle::ORTCHK(A()->GetDimensionsCount(input_tensor_info, &input_dim_count));
+    printf("   - 输入维度数: %zu\n", input_dim_count);
+    
+    for (size_t i = 0; i < input_dim_count; i++) {
+      int64_t dim;
+      kws_handle::ORTCHK(A()->GetDimensions(input_tensor_info, &dim, 1, i));
+      printf("   - 输入维度[%zu]: %ld\n", i, dim);
+    }
+    
+    A()->ReleaseTypeInfo(input_type_info);
+  }
+  
+  if (output_type_info) {
+    const OrtTensorTypeAndShapeInfo* output_tensor_info = nullptr;
+    kws_handle::ORTCHK(A()->CastTypeInfoToTensorInfo(output_type_info, &output_tensor_info));
+    
+    ONNXTensorElementDataType output_type;
+    kws_handle::ORTCHK(A()->GetTensorElementType(output_tensor_info, &output_type));
+    printf("   - 输出类型: %d (FLOAT=%d)\n", output_type, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT);
+    
+    size_t output_dim_count;
+    kws_handle::ORTCHK(A()->GetDimensionsCount(output_tensor_info, &output_dim_count));
+    printf("   - 输出维度数: %zu\n", output_dim_count);
+    
+    for (size_t i = 0; i < output_dim_count; i++) {
+      int64_t dim;
+      kws_handle::ORTCHK(A()->GetDimensions(output_tensor_info, &dim, 1, i));
+      printf("   - 输出维度[%zu]: %ld\n", i, dim);
+    }
+    
+    A()->ReleaseTypeInfo(output_type_info);
+  }
+  
   printf("✅ KWS单模型初始化完成, 阈值: %.3f\n", threshold);
   printf("   - 输入: %s, 输出: %s\n", h->input_name.c_str(), h->output_name.c_str());
   return h;
