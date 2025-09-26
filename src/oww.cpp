@@ -6,6 +6,7 @@
 #include <stdexcept>
 #include <cstdio>
 #include <algorithm>
+#include <ctime>
 
 static const OrtApi* A() { return OrtGetApiBase()->GetApi(ORT_API_VERSION); }
 
