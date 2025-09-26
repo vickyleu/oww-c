@@ -347,6 +347,10 @@ void kws_destroy(kws_handle* h){
 }
 
 int kws_process_i16(kws_handle* h, const short* pcm, size_t samples){
+  // 函数入口日志 - 2024-09-26 09:45
+  fprintf(stderr, "🔍 KWS函数调用: samples=%zu, 时间戳=%ld\n", samples, time(nullptr));
+  fflush(stderr);
+  
   int fired = 0;
   
   for(size_t i = 0; i < samples; i += h->hop){
