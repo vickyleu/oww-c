@@ -435,6 +435,16 @@ int kws_process_i16(kws_handle* h, const short* pcm, size_t samples){
     fprintf(stderr, "KWS输入验证: max=%d min=%d 非零=%d/%zu 原始peak=%d\n", 
             max_val, min_val, non_zero_count, hop_size, (i < samples) ? pcm[i] : 0);
     
+    // 实验：注入测试数据看看模型是否响应
+    static int test_counter = 0;
+    if (test_counter < 5) {
+        fprintf(stderr, "🧪 实验：注入测试数据 (第%d次)\n", test_counter);
+        for(size_t j = 0; j < h->win; j++) {
+            h->ring_buf[j] = (int16_t)(1000 * sin(j * 0.1)); // 注入正弦波
+        }
+        test_counter++;
+    }
+    
     // 创建输入张量
     OrtMemoryInfo* mi = nullptr;
     kws_handle::ORTCHK(A()->CreateCpuMemoryInfo(OrtArenaAllocator, OrtMemTypeDefault, &mi));
