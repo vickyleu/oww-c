@@ -450,14 +450,26 @@ int kws_process_i16(kws_handle* h, const short* pcm, size_t samples){
     const char* input_names[] = {h->input_name.c_str()};
     const char* output_names[] = {h->output_name.c_str()};
     OrtValue* output = nullptr;
+    
+    fprintf(stderr, "🔍 开始模型推理: 输入名称=%s, 输出名称=%s\n", 
+            h->input_name.c_str(), h->output_name.c_str());
+    fflush(stderr);
+    
     kws_handle::ORTCHK(A()->Run(h->ort.mels, nullptr, input_names, (const OrtValue* const*)&input, 1,
                                 output_names, 1, &output));
+    
+    fprintf(stderr, "✅ 模型推理完成\n");
+    fflush(stderr);
     A()->ReleaseValue(input);
     
     // 获取分数
     float* score_ptr = nullptr;
     kws_handle::ORTCHK(A()->GetTensorMutableData(output, (void**)&score_ptr));
     float score = score_ptr[0];
+    
+    fprintf(stderr, "🔍 模型原始输出: score_ptr=%p, score=%.6f\n", score_ptr, score);
+    fflush(stderr);
+    
     A()->ReleaseValue(output);
     
     // 滑动平均
