@@ -1,3 +1,4 @@
+#include <cmath>
 #include "oww.h"
 #include <onnxruntime/core/session/onnxruntime_c_api.h>
 #include <cstring>
@@ -6,7 +7,6 @@
 #include <stdexcept>
 #include <cstdio>
 #include <algorithm>
-#include <ctime>
 
 static const OrtApi* A() { return OrtGetApiBase()->GetApi(ORT_API_VERSION); }
 
@@ -322,69 +322,8 @@ kws_handle* kws_create(const char* model_path, int threads, float threshold){
   h->output_name = std::string(tmp);
   h->ort.alloc->Free(h->ort.alloc, tmp);
   
-  // 打印模型输入输出信息
-  fprintf(stderr, "🔍 模型输入输出信息:\n");
-  fprintf(stderr, "   - 输入名称: %s\n", h->input_name.c_str());
-  fprintf(stderr, "   - 输出名称: %s\n", h->output_name.c_str());
-  
-  // 获取输入输出形状信息
-  size_t input_count, output_count;
-  kws_handle::ORTCHK(A()->SessionGetInputCount(h->ort.mels, &input_count));
-  kws_handle::ORTCHK(A()->SessionGetOutputCount(h->ort.mels, &output_count));
-  
-  fprintf(stderr, "   - 输入数量: %zu, 输出数量: %zu\n", input_count, output_count);
-  
-  // 获取输入输出类型信息
-  OrtTypeInfo* input_type_info = nullptr;
-  OrtTypeInfo* output_type_info = nullptr;
-  kws_handle::ORTCHK(A()->SessionGetInputTypeInfo(h->ort.mels, 0, &input_type_info));
-  kws_handle::ORTCHK(A()->SessionGetOutputTypeInfo(h->ort.mels, 0, &output_type_info));
-  
-  if (input_type_info) {
-    const OrtTensorTypeAndShapeInfo* input_tensor_info = nullptr;
-    kws_handle::ORTCHK(A()->CastTypeInfoToTensorInfo(input_type_info, &input_tensor_info));
-    
-    ONNXTensorElementDataType input_type;
-    kws_handle::ORTCHK(A()->GetTensorElementType(input_tensor_info, &input_type));
-    fprintf(stderr, "   - 输入类型: %d (INT16=%d)\n", input_type, ONNX_TENSOR_ELEMENT_DATA_TYPE_INT16);
-    
-    size_t input_dim_count;
-    kws_handle::ORTCHK(A()->GetDimensionsCount(input_tensor_info, &input_dim_count));
-    fprintf(stderr, "   - 输入维度数: %zu\n", input_dim_count);
-    
-    for (size_t i = 0; i < input_dim_count; i++) {
-      int64_t dim;
-      kws_handle::ORTCHK(A()->GetDimensions(input_tensor_info, &dim, i));
-      fprintf(stderr, "   - 输入维度[%zu]: %ld\n", i, dim);
-    }
-    
-    A()->ReleaseTypeInfo(input_type_info);
-  }
-  
-  if (output_type_info) {
-    const OrtTensorTypeAndShapeInfo* output_tensor_info = nullptr;
-    kws_handle::ORTCHK(A()->CastTypeInfoToTensorInfo(output_type_info, &output_tensor_info));
-    
-    ONNXTensorElementDataType output_type;
-    kws_handle::ORTCHK(A()->GetTensorElementType(output_tensor_info, &output_type));
-    fprintf(stderr, "   - 输出类型: %d (FLOAT=%d)\n", output_type, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT);
-    
-    size_t output_dim_count;
-    kws_handle::ORTCHK(A()->GetDimensionsCount(output_tensor_info, &output_dim_count));
-    fprintf(stderr, "   - 输出维度数: %zu\n", output_dim_count);
-    
-    for (size_t i = 0; i < output_dim_count; i++) {
-      int64_t dim;
-      kws_handle::ORTCHK(A()->GetDimensions(output_tensor_info, &dim, i));
-      fprintf(stderr, "   - 输出维度[%zu]: %ld\n", i, dim);
-    }
-    
-    A()->ReleaseTypeInfo(output_type_info);
-  }
-  
-  fprintf(stderr, "✅ KWS单模型初始化完成, 阈值: %.3f\n", threshold);
-  fprintf(stderr, "   - 输入: %s, 输出: %s\n", h->input_name.c_str(), h->output_name.c_str());
-  fflush(stderr);
+  printf("✅ KWS单模型初始化完成, 阈值: %.3f\n", threshold);
+  printf("   - 输入: %s, 输出: %s\n", h->input_name.c_str(), h->output_name.c_str());
   return h;
 }
 
@@ -409,10 +348,6 @@ void kws_destroy(kws_handle* h){
 }
 
 int kws_process_i16(kws_handle* h, const short* pcm, size_t samples){
-  // 函数入口日志 - 2024-09-26 09:45
-  fprintf(stderr, "🔍 KWS函数调用: samples=%zu, 时间戳=%ld\n", samples, time(nullptr));
-  fflush(stderr);
-  
   int fired = 0;
   
   for(size_t i = 0; i < samples; i += h->hop){
@@ -421,29 +356,6 @@ int kws_process_i16(kws_handle* h, const short* pcm, size_t samples){
     // 滑窗：右移 WIN-HOP，拷贝 HOP
     memmove(h->ring_buf.data(), h->ring_buf.data() + h->hop, (h->win - h->hop) * sizeof(int16_t));
     memcpy(h->ring_buf.data() + (h->win - h->hop), pcm + i, hop_size * sizeof(int16_t));
-    
-    // 验证输入数据：统计新拷贝的数据
-    int16_t* new_data = h->ring_buf.data() + (h->win - h->hop);
-    int16_t max_val = 0, min_val = 0;
-    int non_zero_count = 0;
-    for(size_t j = 0; j < hop_size; j++) {
-        int16_t val = new_data[j];
-        max_val = std::max(max_val, val);
-        min_val = std::min(min_val, val);
-        if(val != 0) non_zero_count++;
-    }
-    fprintf(stderr, "KWS输入验证: max=%d min=%d 非零=%d/%zu 原始peak=%d\n", 
-            max_val, min_val, non_zero_count, hop_size, (i < samples) ? pcm[i] : 0);
-    
-    // 实验：注入测试数据看看模型是否响应
-    static int test_counter = 0;
-    if (test_counter < 5) {
-        fprintf(stderr, "🧪 实验：注入测试数据 (第%d次)\n", test_counter);
-        for(size_t j = 0; j < h->win; j++) {
-            h->ring_buf[j] = (int16_t)(1000 * sin(j * 0.1)); // 注入正弦波
-        }
-        test_counter++;
-    }
     
     // 创建输入张量
     OrtMemoryInfo* mi = nullptr;
@@ -460,26 +372,14 @@ int kws_process_i16(kws_handle* h, const short* pcm, size_t samples){
     const char* input_names[] = {h->input_name.c_str()};
     const char* output_names[] = {h->output_name.c_str()};
     OrtValue* output = nullptr;
-    
-    fprintf(stderr, "🔍 开始模型推理: 输入名称=%s, 输出名称=%s\n", 
-            h->input_name.c_str(), h->output_name.c_str());
-    fflush(stderr);
-    
     kws_handle::ORTCHK(A()->Run(h->ort.mels, nullptr, input_names, (const OrtValue* const*)&input, 1,
                                 output_names, 1, &output));
-    
-    fprintf(stderr, "✅ 模型推理完成\n");
-    fflush(stderr);
     A()->ReleaseValue(input);
     
     // 获取分数
     float* score_ptr = nullptr;
     kws_handle::ORTCHK(A()->GetTensorMutableData(output, (void**)&score_ptr));
     float score = score_ptr[0];
-    
-    fprintf(stderr, "🔍 模型原始输出: score_ptr=%p, score=%.6f\n", score_ptr, score);
-    fflush(stderr);
-    
     A()->ReleaseValue(output);
     
     // 滑动平均
@@ -492,23 +392,315 @@ int kws_process_i16(kws_handle* h, const short* pcm, size_t samples){
     }
     avg /= h->smooth;
     
-    // 调试日志：显示原始分数和滑动平均
-    fprintf(stderr, "KWS raw=%.6f avg=%.6f threshold=%.3f cooldown=%d\n", score, avg, h->threshold, h->cooldown);
-    fflush(stderr);  // 强制刷新 stderr 缓冲区
-    
-    // 更新分数（每次循环都更新）
-    h->last = avg;
-    
     // 冷却处理
     if(h->cooldown > 0) h->cooldown--;
     
     // 触发检测
     if(avg > h->threshold && h->cooldown == 0){
-      fprintf(stderr, "🔍 KWS触发: score=%.3f, 平均=%.3f, 阈值=%.3f\n", score, avg, h->threshold);
+      printf("🔍 KWS触发: score=%.3f, 平均=%.3f, 阈值=%.3f\n", score, avg, h->threshold);
+      h->last = avg;
       h->cooldown = h->cooldown_frames;
       fired = 1;
     }
   }
   
   return fired;
+}
+// ==================== 三链实现 ====================
+
+struct Oww3Ort {
+  OrtEnv* env=nullptr;
+  OrtSessionOptions* so=nullptr;
+  OrtSession* mel=nullptr;
+  OrtSession* emb=nullptr;
+  OrtSession* cls=nullptr;
+  OrtAllocator* alloc=nullptr;
+  std::string mel_in, mel_out;
+  std::string emb_in, emb_out;
+  std::string cls_in, cls_out;
+  
+  ~Oww3Ort(){
+    if(cls) A()->ReleaseSession(cls);
+    if(emb) A()->ReleaseSession(emb);
+    if(mel) A()->ReleaseSession(mel);
+    if(so)  A()->ReleaseSessionOptions(so);
+    if(env) A()->ReleaseEnv(env);
+  }
+};
+
+struct oww3_handle {
+  Oww3Ort ort;
+  
+  // 三链参数
+  int mel_win=76, mel_bins=32;     // mel输出处理为 (32, T)
+  int emb_win=16, emb_dim=96;      // embedding输出 (16, 96)
+  int cls_dim=96;                  // 分类器输入维度
+  
+  float threshold=0.5f;
+  float last=0.0f;
+  
+  // 缓冲
+  std::deque<float> pcm_buf;       // 原始PCM float
+  std::deque<float> mel_buf;       // mel特征 (mel_bins, frame)
+  
+  static void ORTCHK(OrtStatus* st){ 
+    if(st){ 
+      const char* m=A()->GetErrorMessage(st); 
+      std::string s=m?m:"ORT error"; 
+      A()->ReleaseStatus(st); 
+      throw std::runtime_error(s);
+    } 
+  }
+};
+
+static std::string oww3_get_input_name(oww3_handle* h, OrtSession* session, size_t index){
+  char* tmp = nullptr;
+  oww3_handle::ORTCHK(A()->SessionGetInputName(session, index, h->ort.alloc, &tmp));
+  std::string name(tmp);
+  h->ort.alloc->Free(h->ort.alloc, tmp);
+  return name;
+}
+
+static std::string oww3_get_output_name(oww3_handle* h, OrtSession* session, size_t index){
+  char* tmp = nullptr;
+  oww3_handle::ORTCHK(A()->SessionGetOutputName(session, index, h->ort.alloc, &tmp));
+  std::string name(tmp);
+  h->ort.alloc->Free(h->ort.alloc, tmp);
+  return name;
+}
+
+oww3_handle* oww3_create(const char* mel_onnx,
+                         const char* emb_onnx,
+                         const char* cls_onnx,
+                         int threads,
+                         float threshold){
+  printf("🔍 OWW三链模式初始化...\n");
+  
+  auto h = new oww3_handle();
+  h->threshold = threshold;
+  
+  // 初始化ONNX Runtime
+  oww3_handle::ORTCHK(A()->CreateEnv(ORT_LOGGING_LEVEL_WARNING, "oww3", &h->ort.env));
+  oww3_handle::ORTCHK(A()->CreateSessionOptions(&h->ort.so));
+  oww3_handle::ORTCHK(A()->SetIntraOpNumThreads(h->ort.so, threads));
+  oww3_handle::ORTCHK(A()->GetAllocatorWithDefaultOptions(&h->ort.alloc));
+  
+  // 加载三个模型
+  h->ort.mel = load_session(h->ort.env, h->ort.so, mel_onnx);
+  h->ort.emb = load_session(h->ort.env, h->ort.so, emb_onnx);
+  h->ort.cls = load_session(h->ort.env, h->ort.so, cls_onnx);
+  
+  // 获取输入输出名称
+  h->ort.mel_in = oww3_get_input_name(h, h->ort.mel, 0);
+  h->ort.mel_out = oww3_get_output_name(h, h->ort.mel, 0);
+  h->ort.emb_in = oww3_get_input_name(h, h->ort.emb, 0);
+  h->ort.emb_out = oww3_get_output_name(h, h->ort.emb, 0);
+  h->ort.cls_in = oww3_get_input_name(h, h->ort.cls, 0);
+  h->ort.cls_out = oww3_get_output_name(h, h->ort.cls, 0);
+  
+  printf("✅ OWW三链模式初始化完成, 阈值: %.3f\n", threshold);
+  return h;
+}
+
+void oww3_reset(oww3_handle* h){
+  h->pcm_buf.clear(); 
+  h->mel_buf.clear(); 
+  h->last=0.0f;
+}
+
+float oww3_last_score(const oww3_handle* h){ 
+  return h->last; 
+}
+
+size_t oww3_recommended_chunk(){ 
+  return 1280; // ~80ms@16k
+}
+
+void oww3_destroy(oww3_handle* h){
+  delete h;
+}
+
+// 运行mel spectrogram模型
+static void oww3_run_mel(oww3_handle* h, const float* pcm, size_t samples){
+  OrtMemoryInfo* mi=nullptr; 
+  oww3_handle::ORTCHK(A()->CreateCpuMemoryInfo(OrtArenaAllocator, OrtMemTypeDefault, &mi));
+  
+  // 输入: [1, samples]
+  OrtValue* in=nullptr;
+  int64_t in_shape[2] = {1, (int64_t)samples};
+  oww3_handle::ORTCHK(A()->CreateTensorWithDataAsOrtValue(mi, (void*)pcm, samples*sizeof(float),
+                                                         in_shape, 2, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, &in));
+  A()->ReleaseMemoryInfo(mi);
+  
+  // 推理
+  const char* in_names[]={h->ort.mel_in.c_str()}; 
+  const char* out_names[]={h->ort.mel_out.c_str()};
+  OrtValue* out=nullptr; 
+  oww3_handle::ORTCHK(A()->Run(h->ort.mel, nullptr, in_names, (const OrtValue* const*)&in, 1, out_names, 1, &out));
+  A()->ReleaseValue(in);
+  
+  // 读取mel输出并处理为 (32, T)
+  float* mel_data=nullptr; 
+  oww3_handle::ORTCHK(A()->GetTensorMutableData(out, (void**)&mel_data));
+  
+  // 获取输出形状
+  OrtTensorTypeAndShapeInfo* info=nullptr;
+  oww3_handle::ORTCHK(A()->GetTensorTypeAndShape(out, &info));
+  size_t dim_count=0;
+  oww3_handle::ORTCHK(A()->GetDimensionsCount(info, &dim_count));
+  
+  std::vector<int64_t> shape(dim_count);
+  oww3_handle::ORTCHK(A()->GetDimensions(info, shape.data(), dim_count));
+  A()->ReleaseTensorTypeAndShapeInfo(info);
+  
+  // 处理mel输出，确保为 (32, T) 格式
+  int mel_bins = 32;
+  int frames = 1;
+  for(size_t i = 0; i < dim_count; i++){
+    if(shape[i] == 32) mel_bins = 32;
+    else if(shape[i] > 1) frames = shape[i];
+  }
+  
+  // 转换为 (32, T) 格式并应用dB归一化
+  for(int t = 0; t < frames; t++){
+    for(int f = 0; f < mel_bins; f++){
+      float val = mel_data[t * mel_bins + f];
+      // dB归一化: db = 10*log10(max(val,1e-10)); mel01 = clip((db+80)/80, 0, 1)
+      float db = 10.0f * std::log10(std::max(val, 1e-10f));
+      float mel01 = std::max(0.0f, std::min(1.0f, (db + 80.0f) / 80.0f));
+      h->mel_buf.push_back(mel01);
+    }
+  }
+  
+  A()->ReleaseValue(out);
+}
+
+// 运行embedding模型
+static std::vector<float> oww3_run_emb(oww3_handle* h){
+  std::vector<float> embeddings;
+  
+  // 需要 16*76 = 1216 帧
+  int need_frames = h->emb_win * h->mel_win; // 16 * 76
+  int current_frames = h->mel_buf.size() / h->mel_bins;
+  
+  if(current_frames < need_frames){
+    // 右侧补零
+    int pad_frames = need_frames - current_frames;
+    for(int i = 0; i < pad_frames * h->mel_bins; i++){
+      h->mel_buf.push_back(0.0f);
+    }
+  } else if(current_frames > need_frames){
+    // 中间裁剪
+    int start_frame = (current_frames - need_frames) / 2;
+    std::deque<float> new_buf;
+    for(int i = start_frame * h->mel_bins; i < (start_frame + need_frames) * h->mel_bins; i++){
+      new_buf.push_back(h->mel_buf[i]);
+    }
+    h->mel_buf = new_buf;
+  }
+  
+  // 逐窗处理
+  for(int w = 0; w < h->emb_win; w++){
+    // 准备输入 (1, 76, 32, 1)
+    std::vector<float> window_input(1 * 76 * 32 * 1, 0.0f);
+    for(int t = 0; t < 76; t++){
+      for(int f = 0; f < 32; f++){
+        int idx = w * 76 + t;
+        window_input[t * 32 + f] = h->mel_buf[idx * 32 + f];
+      }
+    }
+    
+    // 运行embedding模型
+    OrtMemoryInfo* mi=nullptr;
+    oww3_handle::ORTCHK(A()->CreateCpuMemoryInfo(OrtArenaAllocator, OrtMemTypeDefault, &mi));
+    
+    OrtValue* in=nullptr;
+    int64_t in_shape[4] = {1, 76, 32, 1};
+    oww3_handle::ORTCHK(A()->CreateTensorWithDataAsOrtValue(mi, window_input.data(), 
+                                                           window_input.size()*sizeof(float),
+                                                           in_shape, 4, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, &in));
+    A()->ReleaseMemoryInfo(mi);
+    
+    const char* in_names[]={h->ort.emb_in.c_str()};
+    const char* out_names[]={h->ort.emb_out.c_str()};
+    OrtValue* out=nullptr;
+    oww3_handle::ORTCHK(A()->Run(h->ort.emb, nullptr, in_names, (const OrtValue* const*)&in, 1, out_names, 1, &out));
+    A()->ReleaseValue(in);
+    
+    // 读取embedding输出 (96维)
+    float* emb_data=nullptr;
+    oww3_handle::ORTCHK(A()->GetTensorMutableData(out, (void**)&emb_data));
+    
+    // 添加到结果中
+    for(int i = 0; i < h->cls_dim; i++){
+      embeddings.push_back(emb_data[i]);
+    }
+    
+    A()->ReleaseValue(out);
+  }
+  
+  return embeddings;
+}
+
+// 运行分类器模型
+static float oww3_run_cls(oww3_handle* h, const std::vector<float>& embeddings){
+  OrtMemoryInfo* mi=nullptr;
+  oww3_handle::ORTCHK(A()->CreateCpuMemoryInfo(OrtArenaAllocator, OrtMemTypeDefault, &mi));
+  
+  // 输入: (1, 16, 96)
+  std::vector<float> cls_input = embeddings;
+  OrtValue* in=nullptr;
+  int64_t in_shape[3] = {1, h->emb_win, h->cls_dim};
+  oww3_handle::ORTCHK(A()->CreateTensorWithDataAsOrtValue(mi, cls_input.data(),
+                                                         cls_input.size()*sizeof(float),
+                                                         in_shape, 3, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, &in));
+  A()->ReleaseMemoryInfo(mi);
+  
+  const char* in_names[]={h->ort.cls_in.c_str()};
+  const char* out_names[]={h->ort.cls_out.c_str()};
+  OrtValue* out=nullptr;
+  oww3_handle::ORTCHK(A()->Run(h->ort.cls, nullptr, in_names, (const OrtValue* const*)&in, 1, out_names, 1, &out));
+  A()->ReleaseValue(in);
+  
+  // 读取logit输出
+  float* logit_data=nullptr;
+  oww3_handle::ORTCHK(A()->GetTensorMutableData(out, (void**)&logit_data));
+  float logit = logit_data[0];
+  A()->ReleaseValue(out);
+  
+  // 转换为概率
+  float prob = 1.0f / (1.0f + std::exp(-std::max(-40.0f, std::min(40.0f, logit))));
+  return prob;
+}
+
+int oww3_process_i16(oww3_handle* h, const short* pcm, size_t samples){
+  // 转换为float并添加到缓冲区
+  for(size_t i = 0; i < samples; i++){
+    h->pcm_buf.push_back(pcm[i] / 32768.0f);
+  }
+  
+  // 保持足够的缓冲区大小
+  size_t min_buf = h->emb_win * h->mel_win * 160; // 约16*76*160样本
+  while(h->pcm_buf.size() > min_buf * 2){
+    h->pcm_buf.pop_front();
+  }
+  
+  if(h->pcm_buf.size() < min_buf){
+    return 0; // 缓冲区不足
+  }
+  
+  // 运行三链推理
+  oww3_run_mel(h, &h->pcm_buf[0], h->pcm_buf.size());
+  auto embeddings = oww3_run_emb(h);
+  float score = oww3_run_cls(h, embeddings);
+  
+  h->last = score;
+  
+  // 检查是否触发
+  if(score > h->threshold){
+    printf("🔍 OWW3触发: score=%.3f, 阈值=%.3f\n", score, h->threshold);
+    return 1;
+  }
+  
+  return 0;
 }

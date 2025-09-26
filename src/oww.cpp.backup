@@ -6,7 +6,6 @@
 #include <stdexcept>
 #include <cstdio>
 #include <algorithm>
-#include <ctime>
 
 static const OrtApi* A() { return OrtGetApiBase()->GetApi(ORT_API_VERSION); }
 
@@ -322,69 +321,8 @@ kws_handle* kws_create(const char* model_path, int threads, float threshold){
   h->output_name = std::string(tmp);
   h->ort.alloc->Free(h->ort.alloc, tmp);
   
-  // 打印模型输入输出信息
-  fprintf(stderr, "🔍 模型输入输出信息:\n");
-  fprintf(stderr, "   - 输入名称: %s\n", h->input_name.c_str());
-  fprintf(stderr, "   - 输出名称: %s\n", h->output_name.c_str());
-  
-  // 获取输入输出形状信息
-  size_t input_count, output_count;
-  kws_handle::ORTCHK(A()->SessionGetInputCount(h->ort.mels, &input_count));
-  kws_handle::ORTCHK(A()->SessionGetOutputCount(h->ort.mels, &output_count));
-  
-  fprintf(stderr, "   - 输入数量: %zu, 输出数量: %zu\n", input_count, output_count);
-  
-  // 获取输入输出类型信息
-  OrtTypeInfo* input_type_info = nullptr;
-  OrtTypeInfo* output_type_info = nullptr;
-  kws_handle::ORTCHK(A()->SessionGetInputTypeInfo(h->ort.mels, 0, &input_type_info));
-  kws_handle::ORTCHK(A()->SessionGetOutputTypeInfo(h->ort.mels, 0, &output_type_info));
-  
-  if (input_type_info) {
-    const OrtTensorTypeAndShapeInfo* input_tensor_info = nullptr;
-    kws_handle::ORTCHK(A()->CastTypeInfoToTensorInfo(input_type_info, &input_tensor_info));
-    
-    ONNXTensorElementDataType input_type;
-    kws_handle::ORTCHK(A()->GetTensorElementType(input_tensor_info, &input_type));
-    fprintf(stderr, "   - 输入类型: %d (INT16=%d)\n", input_type, ONNX_TENSOR_ELEMENT_DATA_TYPE_INT16);
-    
-    size_t input_dim_count;
-    kws_handle::ORTCHK(A()->GetDimensionsCount(input_tensor_info, &input_dim_count));
-    fprintf(stderr, "   - 输入维度数: %zu\n", input_dim_count);
-    
-    for (size_t i = 0; i < input_dim_count; i++) {
-      int64_t dim;
-      kws_handle::ORTCHK(A()->GetDimensions(input_tensor_info, &dim, i));
-      fprintf(stderr, "   - 输入维度[%zu]: %ld\n", i, dim);
-    }
-    
-    A()->ReleaseTypeInfo(input_type_info);
-  }
-  
-  if (output_type_info) {
-    const OrtTensorTypeAndShapeInfo* output_tensor_info = nullptr;
-    kws_handle::ORTCHK(A()->CastTypeInfoToTensorInfo(output_type_info, &output_tensor_info));
-    
-    ONNXTensorElementDataType output_type;
-    kws_handle::ORTCHK(A()->GetTensorElementType(output_tensor_info, &output_type));
-    fprintf(stderr, "   - 输出类型: %d (FLOAT=%d)\n", output_type, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT);
-    
-    size_t output_dim_count;
-    kws_handle::ORTCHK(A()->GetDimensionsCount(output_tensor_info, &output_dim_count));
-    fprintf(stderr, "   - 输出维度数: %zu\n", output_dim_count);
-    
-    for (size_t i = 0; i < output_dim_count; i++) {
-      int64_t dim;
-      kws_handle::ORTCHK(A()->GetDimensions(output_tensor_info, &dim, i));
-      fprintf(stderr, "   - 输出维度[%zu]: %ld\n", i, dim);
-    }
-    
-    A()->ReleaseTypeInfo(output_type_info);
-  }
-  
-  fprintf(stderr, "✅ KWS单模型初始化完成, 阈值: %.3f\n", threshold);
-  fprintf(stderr, "   - 输入: %s, 输出: %s\n", h->input_name.c_str(), h->output_name.c_str());
-  fflush(stderr);
+  printf("✅ KWS单模型初始化完成, 阈值: %.3f\n", threshold);
+  printf("   - 输入: %s, 输出: %s\n", h->input_name.c_str(), h->output_name.c_str());
   return h;
 }
 
@@ -409,10 +347,6 @@ void kws_destroy(kws_handle* h){
 }
 
 int kws_process_i16(kws_handle* h, const short* pcm, size_t samples){
-  // 函数入口日志 - 2024-09-26 09:45
-  fprintf(stderr, "🔍 KWS函数调用: samples=%zu, 时间戳=%ld\n", samples, time(nullptr));
-  fflush(stderr);
-  
   int fired = 0;
   
   for(size_t i = 0; i < samples; i += h->hop){
@@ -421,29 +355,6 @@ int kws_process_i16(kws_handle* h, const short* pcm, size_t samples){
     // 滑窗：右移 WIN-HOP，拷贝 HOP
     memmove(h->ring_buf.data(), h->ring_buf.data() + h->hop, (h->win - h->hop) * sizeof(int16_t));
     memcpy(h->ring_buf.data() + (h->win - h->hop), pcm + i, hop_size * sizeof(int16_t));
-    
-    // 验证输入数据：统计新拷贝的数据
-    int16_t* new_data = h->ring_buf.data() + (h->win - h->hop);
-    int16_t max_val = 0, min_val = 0;
-    int non_zero_count = 0;
-    for(size_t j = 0; j < hop_size; j++) {
-        int16_t val = new_data[j];
-        max_val = std::max(max_val, val);
-        min_val = std::min(min_val, val);
-        if(val != 0) non_zero_count++;
-    }
-    fprintf(stderr, "KWS输入验证: max=%d min=%d 非零=%d/%zu 原始peak=%d\n", 
-            max_val, min_val, non_zero_count, hop_size, (i < samples) ? pcm[i] : 0);
-    
-    // 实验：注入测试数据看看模型是否响应
-    static int test_counter = 0;
-    if (test_counter < 5) {
-        fprintf(stderr, "🧪 实验：注入测试数据 (第%d次)\n", test_counter);
-        for(size_t j = 0; j < h->win; j++) {
-            h->ring_buf[j] = (int16_t)(1000 * sin(j * 0.1)); // 注入正弦波
-        }
-        test_counter++;
-    }
     
     // 创建输入张量
     OrtMemoryInfo* mi = nullptr;
@@ -460,26 +371,14 @@ int kws_process_i16(kws_handle* h, const short* pcm, size_t samples){
     const char* input_names[] = {h->input_name.c_str()};
     const char* output_names[] = {h->output_name.c_str()};
     OrtValue* output = nullptr;
-    
-    fprintf(stderr, "🔍 开始模型推理: 输入名称=%s, 输出名称=%s\n", 
-            h->input_name.c_str(), h->output_name.c_str());
-    fflush(stderr);
-    
     kws_handle::ORTCHK(A()->Run(h->ort.mels, nullptr, input_names, (const OrtValue* const*)&input, 1,
                                 output_names, 1, &output));
-    
-    fprintf(stderr, "✅ 模型推理完成\n");
-    fflush(stderr);
     A()->ReleaseValue(input);
     
     // 获取分数
     float* score_ptr = nullptr;
     kws_handle::ORTCHK(A()->GetTensorMutableData(output, (void**)&score_ptr));
     float score = score_ptr[0];
-    
-    fprintf(stderr, "🔍 模型原始输出: score_ptr=%p, score=%.6f\n", score_ptr, score);
-    fflush(stderr);
-    
     A()->ReleaseValue(output);
     
     // 滑动平均
@@ -492,19 +391,13 @@ int kws_process_i16(kws_handle* h, const short* pcm, size_t samples){
     }
     avg /= h->smooth;
     
-    // 调试日志：显示原始分数和滑动平均
-    fprintf(stderr, "KWS raw=%.6f avg=%.6f threshold=%.3f cooldown=%d\n", score, avg, h->threshold, h->cooldown);
-    fflush(stderr);  // 强制刷新 stderr 缓冲区
-    
-    // 更新分数（每次循环都更新）
-    h->last = avg;
-    
     // 冷却处理
     if(h->cooldown > 0) h->cooldown--;
     
     // 触发检测
     if(avg > h->threshold && h->cooldown == 0){
-      fprintf(stderr, "🔍 KWS触发: score=%.3f, 平均=%.3f, 阈值=%.3f\n", score, avg, h->threshold);
+      printf("🔍 KWS触发: score=%.3f, 平均=%.3f, 阈值=%.3f\n", score, avg, h->threshold);
+      h->last = avg;
       h->cooldown = h->cooldown_frames;
       fired = 1;
     }
