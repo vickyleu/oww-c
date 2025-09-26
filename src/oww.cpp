@@ -392,7 +392,8 @@ int kws_process_i16(kws_handle* h, const short* pcm, size_t samples){
     avg /= h->smooth;
     
     // 调试日志：显示原始分数和滑动平均
-    printf("KWS raw=%.6f avg=%.6f threshold=%.3f cooldown=%d\n", score, avg, h->threshold, h->cooldown);
+    fprintf(stderr, "KWS raw=%.6f avg=%.6f threshold=%.3f cooldown=%d\n", score, avg, h->threshold, h->cooldown);
+    fflush(stderr);  // 强制刷新 stderr 缓冲区
     
     // 更新分数（每次循环都更新）
     h->last = avg;
@@ -402,7 +403,7 @@ int kws_process_i16(kws_handle* h, const short* pcm, size_t samples){
     
     // 触发检测
     if(avg > h->threshold && h->cooldown == 0){
-      printf("🔍 KWS触发: score=%.3f, 平均=%.3f, 阈值=%.3f\n", score, avg, h->threshold);
+      fprintf(stderr, "🔍 KWS触发: score=%.3f, 平均=%.3f, 阈值=%.3f\n", score, avg, h->threshold);
       h->cooldown = h->cooldown_frames;
       fired = 1;
     }
