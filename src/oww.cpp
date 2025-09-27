@@ -1,5 +1,5 @@
 #include "oww.h"
-#include <onnxruntime_c_api.h>
+#include <onnxruntime/core/session/onnxruntime_c_api.h>
 #include <cstring>
 #include <vector>
 #include <deque>
@@ -39,11 +39,18 @@ struct oww_handle {
   int mel_bins=32;     // mel频谱32维
   int nwin=16;         // 16个窗
   
+  // 估算参数（16kHz, 10ms hop, 25ms win）
+  static const int SR = 16000;
+  static const int HOP = 160;
+  static const int WIN = 400;
+  static const int NEED_FRAMES = 16 * 76;  // 1216
+  static const int NEED_SAMPLES = (NEED_FRAMES - 1) * HOP + WIN;  // ≈194800
+  
   float threshold=0.5f;
   float last=0.0f;
   
-  // 缓冲
-  std::deque<float> pcm_buf;       // 原始PCM float
+  // 环形缓冲区 - 扩大到支持完整的mel输入
+  std::deque<float> pcm_buf;       // 原始PCM float，容量约195k
   
   static void ORTCHK(OrtStatus* st){ 
     if(st){ 
@@ -120,7 +127,6 @@ oww_handle* oww_create(const char* mel_onnx,
 
 void oww_reset(oww_handle* h){
   h->pcm_buf.clear(); 
-  h->mel_buf.clear(); 
   h->last=0.0f;
 }
 
@@ -204,8 +210,13 @@ static std::vector<float> run_mel(oww_handle* h, const float* pcm, size_t sample
         }
       }
       
-      // 转dB并归一化
+      // 转dB并归一化到[0,1]
       power_to_db01(result.data(), result.size());
+      
+      // 调试：打印dB01后的统计
+      fprintf(stderr, "🔍 DEBUG mel转dB01后: T=%d, 前6值=[%.3f,%.3f,%.3f,%.3f,%.3f,%.3f]\n", 
+             T, result[0], result[1], result[2], result[3], result[4], result[5]);
+      fflush(stderr);
     }
   }
   
@@ -246,13 +257,26 @@ static std::vector<float> run_emb_window(oww_handle* h, const float* mel_window)
 
 // 三链检测：mel -> emb -> cls
 static int try_detect_three_chain(oww_handle* h){
-  if (h->pcm_buf.size() < h->mel_win * h->nwin) {
+  if (h->pcm_buf.size() < oww_handle::NEED_SAMPLES) {
     return 0; // PCM数据不足
   }
   
-  // 1. 运行mel模型
-  std::vector<float> pcm_data(h->pcm_buf.begin(), h->pcm_buf.end());
+  // 1. 运行mel模型 - 使用完整的NEED_SAMPLES
+  std::vector<float> pcm_data(oww_handle::NEED_SAMPLES);
+  std::copy(h->pcm_buf.end() - oww_handle::NEED_SAMPLES, h->pcm_buf.end(), pcm_data.begin());
   std::vector<float> mel_data = run_mel(h, pcm_data.data(), pcm_data.size());
+  
+  // 调试：打印mel数据统计
+  if (!mel_data.empty()) {
+    float mel_mean = 0.0f, mel_std = 0.0f;
+    for (float v : mel_data) mel_mean += v;
+    mel_mean /= mel_data.size();
+    for (float v : mel_data) mel_std += (v - mel_mean) * (v - mel_mean);
+    mel_std = sqrtf(mel_std / mel_data.size());
+    fprintf(stderr, "🔍 DEBUG mel统计: size=%zu, mean=%.6f, std=%.6f\n", 
+           mel_data.size(), mel_mean, mel_std);
+    fflush(stderr);
+  }
   
   if (mel_data.empty()) {
     return 0;
@@ -274,7 +298,7 @@ static int try_detect_three_chain(oww_handle* h){
              mel_data.data() + m * T + start, 
              need_frames * sizeof(float));
     }
-  } else {
+        } else {
     aligned_mel = mel_data;
   }
   
@@ -293,6 +317,18 @@ static int try_detect_three_chain(oww_handle* h){
     std::vector<float> emb_out = run_emb_window(h, window.data());
     memcpy(emb_features.data() + i * 96, emb_out.data(), 96 * sizeof(float));
   }
+  
+  // 调试：打印emb特征统计
+  float emb_mean = 0.0f, emb_std = 0.0f;
+  for (float v : emb_features) emb_mean += v;
+  emb_mean /= emb_features.size();
+  for (float v : emb_features) emb_std += (v - emb_mean) * (v - emb_mean);
+  emb_std = sqrtf(emb_std / emb_features.size());
+  fprintf(stderr, "🔍 DEBUG emb统计: size=%zu, mean=%.6f, std=%.6f, 前6值=[%.3f,%.3f,%.3f,%.3f,%.3f,%.3f]\n", 
+         emb_features.size(), emb_mean, emb_std,
+         emb_features[0], emb_features[1], emb_features[2], 
+         emb_features[3], emb_features[4], emb_features[5]);
+  fflush(stderr);
   
   // 4. 运行cls模型
   OrtMemoryInfo* mi=nullptr; 
@@ -338,13 +374,19 @@ int oww_process_i16(oww_handle* h, const short* pcm, size_t samples) {
     h->pcm_buf.push_back(pcm[i] / 32768.0f);
   }
   
-  // 保持缓冲区大小合理
-  while (h->pcm_buf.size() > h->mel_win * 76 * 2) {
+  // 保持缓冲区大小 - 扩大到支持完整mel输入
+  while (h->pcm_buf.size() > oww_handle::NEED_SAMPLES + 16000) {  // 额外1秒缓冲
     h->pcm_buf.pop_front();
   }
   
+  // 调试：打印缓冲区状态
+  fprintf(stderr, "🔍 三链缓冲区状态: %zu/%d 样本 (%.1f%%)\n", 
+         h->pcm_buf.size(), oww_handle::NEED_SAMPLES, 
+         100.0f * h->pcm_buf.size() / oww_handle::NEED_SAMPLES);
+  fflush(stderr);
+  
   // 如果缓冲区足够大，尝试检测
-  if (h->pcm_buf.size() >= h->mel_win * 76) {
+  if (h->pcm_buf.size() >= oww_handle::NEED_SAMPLES) {
     return try_detect_three_chain(h);
   }
   
