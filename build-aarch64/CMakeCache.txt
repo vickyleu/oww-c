@@ -32,6 +32,9 @@ CMAKE_PROJECT_NAME:STATIC=oww_c
 //No help, variable specified on the command line.
 CMAKE_TOOLCHAIN_FILE:UNINITIALIZED=cmake/toolchain-aarch64.cmake
 
+//No help, variable specified on the command line.
+OWW_USE_PKGCONFIG:UNINITIALIZED=OFF
+
 //Value Computed by CMake
 oww_c_BINARY_DIR:STATIC=/Users/vickyleu/Developer/Github/oww-c/build-aarch64
 
