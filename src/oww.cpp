@@ -43,8 +43,8 @@ struct oww_handle {
   static const int SR = 16000;
   static const int HOP = 160;
   static const int WIN = 400;
-  static const int NEED_FRAMES = 16 * 76;  // 1216
-  static const int NEED_SAMPLES = (NEED_FRAMES - 1) * HOP + WIN;  // ≈194800
+  static const int NEED_FRAMES = 16 * 76;  // 1216帧用于完整推理
+  static const int NEED_SAMPLES = 19480;  // 约1.2秒，足够"小愚小愚"
   
   float threshold=0.5f;
   float last=0.0f;
@@ -374,16 +374,19 @@ int oww_process_i16(oww_handle* h, const short* pcm, size_t samples) {
     h->pcm_buf.push_back(pcm[i] / 32768.0f);
   }
   
-  // 保持缓冲区大小 - 扩大到支持完整mel输入
-  while (h->pcm_buf.size() > oww_handle::NEED_SAMPLES + 16000) {  // 额外1秒缓冲
+  // 保持缓冲区大小 - 合理的滑动窗口
+  while (h->pcm_buf.size() > oww_handle::NEED_SAMPLES + 3200) {  // 额外0.2秒缓冲
     h->pcm_buf.pop_front();
   }
   
-  // 调试：打印缓冲区状态
-  fprintf(stderr, "🔍 三链缓冲区状态: %zu/%d 样本 (%.1f%%)\n", 
-         h->pcm_buf.size(), oww_handle::NEED_SAMPLES, 
-         100.0f * h->pcm_buf.size() / oww_handle::NEED_SAMPLES);
-  fflush(stderr);
+  // 调试：每10次打印一次缓冲区状态
+  static int debug_counter = 0;
+  if (++debug_counter % 10 == 0) {
+    fprintf(stderr, "🔍 三链缓冲区状态: %zu/%d 样本 (%.1f%%)\n", 
+           h->pcm_buf.size(), oww_handle::NEED_SAMPLES, 
+           100.0f * h->pcm_buf.size() / oww_handle::NEED_SAMPLES);
+    fflush(stderr);
+  }
   
   // 如果缓冲区足够大，尝试检测
   if (h->pcm_buf.size() >= oww_handle::NEED_SAMPLES) {
