@@ -44,7 +44,7 @@ struct oww_handle {
   static const int HOP = 160;
   static const int WIN = 400;
   static const int NEED_FRAMES = 16 * 76;  // 1216帧用于完整推理
-  static const int NEED_SAMPLES = 19480;  // 约1.2秒，足够"小愚小愚"
+  static const int NEED_SAMPLES = 32000;  // 约2秒，确保mel输出足够帧数
   
   float threshold=0.5f;
   float last=0.0f;
