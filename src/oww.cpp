@@ -512,3 +512,25 @@ int kws_process_i16(kws_handle* h, const short* pcm, size_t samples){
   
   return fired;
 }
+
+// 三链模式的oww_process_i16函数实现
+int oww_process_i16(oww_handle* h, const short* pcm, size_t samples) {
+  if (!h || !pcm || samples == 0) return 0;
+  
+  // 将int16 PCM转换为float并添加到缓冲区
+  for (size_t i = 0; i < samples; i++) {
+    h->pcm_buf.push_back(pcm[i] / 32768.0f);
+  }
+  
+  // 保持缓冲区大小合理
+  while (h->pcm_buf.size() > h->mel_win * 76 * 2) {
+    h->pcm_buf.pop_front();
+  }
+  
+  // 如果缓冲区足够大，尝试检测
+  if (h->pcm_buf.size() >= h->mel_win * 76) {
+    return try_detect_two_chain(h);
+  }
+  
+  return 0;
+}
