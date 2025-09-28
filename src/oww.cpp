@@ -370,7 +370,7 @@ static int try_detect_three_chain(oww_handle* h){
   
   A()->ReleaseValue(out);
   
-  fprintf(stderr, "🔍 三链唤醒检测: logit=%.6f, prob=%.6f, 阈值=%.3f, 结果=%s\n", 
+  fprintf(stderr, "🔍 三链唤醒检测: logit=%.6f, prob=%.12f, 阈值=%.6f, 结果=%s\n", 
          logit, h->last, h->threshold, (h->last >= h->threshold) ? "触发" : "未触发");
   fflush(stderr);
   
