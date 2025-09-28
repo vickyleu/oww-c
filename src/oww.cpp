@@ -142,99 +142,106 @@ void oww_destroy(oww_handle* h){
   delete h;
 }
 
-// mel模型输出已经是dB值，直接归一化到[0,1]
-static void power_to_db01(float* data, size_t size) {
-  for (size_t i = 0; i < size; i++) {
-    // mel模型输出已经是dB值，直接归一化到[0,1]
-    // 假设dB范围约为[-80, +20]，映射到[0,1]
-    data[i] = fmaxf(0.0f, fminf(1.0f, (data[i] + 80.0f) / 100.0f));
+// 与 Notebook 一致的 power→dB→[0,1]
+static inline void power_to_db01(float* x, size_t n) {
+  const float eps = 1e-10f;
+  for (size_t i = 0; i < n; ++i) {
+    float p  = fmaxf(x[i], eps);
+    float db = 10.f * log10f(p);
+    float y  = (db + 80.f) / 80.f;
+    x[i] = y < 0.f ? 0.f : (y > 1.f ? 1.f : y);
   }
 }
 
-// 运行mel spectrogram模型，返回(32, T)
+// 读取 ORT 输出形状，去掉所有 size=1 轴
+static std::vector<int64_t> squeeze_dims(const std::vector<int64_t>& in) {
+  std::vector<int64_t> d;
+  d.reserve(in.size());
+  for (auto v : in) if (v != 1) d.push_back(v);
+  return d;
+}
+
+// 运行 mel：输入 [1, samples]，输出强制重排到 (32, T) 并做 dB01
 static std::vector<float> run_mel(oww_handle* h, const float* pcm, size_t samples){
   OrtMemoryInfo* mi=nullptr; 
   oww_handle::ORTCHK(A()->CreateCpuMemoryInfo(OrtArenaAllocator, OrtMemTypeDefault, &mi));
-  
-  // 输入: [1, samples]
+
+  // in: [1, N]
   OrtValue* in=nullptr;
-  int64_t in_shape[2] = {1, (int64_t)samples};
-  oww_handle::ORTCHK(A()->CreateTensorWithDataAsOrtValue(mi, (void*)pcm, samples*sizeof(float),
-                                                         in_shape, 2, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, &in));
+  const int64_t in_shape[2] = {1, (int64_t)samples};
+  oww_handle::ORTCHK(A()->CreateTensorWithDataAsOrtValue(
+      mi, (void*)pcm, samples*sizeof(float), in_shape, 2,
+      ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, &in));
   A()->ReleaseMemoryInfo(mi);
-  
-  // 推理
-  const char* in_names[]={h->ort.mel_in0.c_str()}; 
-  const char* out_names[]={h->ort.mel_out0.c_str()};
+
+  // run
+  const char* in_names[]  = {h->ort.mel_in0.c_str()};
+  const char* out_names[] = {h->ort.mel_out0.c_str()};
   OrtValue* out=nullptr; 
-  oww_handle::ORTCHK(A()->Run(h->ort.mel, nullptr, in_names, (const OrtValue* const*)&in, 1, out_names, 1, &out));
+  oww_handle::ORTCHK(A()->Run(h->ort.mel, nullptr, in_names,
+                              (const OrtValue* const*)&in, 1,
+                              out_names, 1, &out));
   A()->ReleaseValue(in);
-  
-  // 读取mel输出
-  float* mel_data=nullptr; 
-  oww_handle::ORTCHK(A()->GetTensorMutableData(out, (void**)&mel_data));
-  
+
+  // get buffer + dims
+  float* buf=nullptr; 
+  oww_handle::ORTCHK(A()->GetTensorMutableData(out, (void**)&buf));
   OrtTensorTypeAndShapeInfo* info=nullptr;
   oww_handle::ORTCHK(A()->GetTensorTypeAndShape(out, &info));
   size_t dim_count = 0;
   oww_handle::ORTCHK(A()->GetDimensionsCount(info, &dim_count));
-  std::vector<int64_t> dims(dim_count);
-  oww_handle::ORTCHK(A()->GetDimensions(info, dims.data(), dim_count));
+  std::vector<int64_t> raw_dims(dim_count);
+  oww_handle::ORTCHK(A()->GetDimensions(info, raw_dims.data(), dim_count));
   A()->ReleaseTensorTypeAndShapeInfo(info);
-  
-  // 找到含32的维度并移到axis0
-  std::vector<float> result;
-  if (dim_count >= 2) {
-    int mel_axis = -1;
-    for (size_t i = 0; i < dim_count; i++) {
-      if (dims[i] == 32) {
-        mel_axis = i;
-        break;
-      }
-    }
-    
-    if (mel_axis >= 0) {
-      // 计算总元素数
-      size_t total_size = 1;
-      for (size_t i = 0; i < dim_count; i++) {
-        total_size *= dims[i];
-      }
-      
-      int T = total_size / 32;  // 时间维度
-      result.resize(32 * T);
-      
-      // 复制数据并重排为(32, T)
-      for (int t = 0; t < T; t++) {
-        for (int m = 0; m < 32; m++) {
-          result[m * T + t] = mel_data[t * 32 + m];
-        }
-      }
-      
-      // 调试：打印dB01前的原始mel统计
-      float mel_mean = 0.0f, mel_max = -1e9f, mel_min = 1e9f;
-      for (size_t i = 0; i < result.size(); i++) {
-        mel_mean += result[i];
-        mel_max = fmaxf(mel_max, result[i]);
-        mel_min = fminf(mel_min, result[i]);
-      }
-      mel_mean /= result.size();
-      fprintf(stderr, "🔍 DEBUG mel原始功率: size=%zu, mean=%.8f, min=%.8f, max=%.8f, 前6值=[%.8f,%.8f,%.8f,%.8f,%.8f,%.8f]\n", 
-             result.size(), mel_mean, mel_min, mel_max,
-             result[0], result[1], result[2], result[3], result[4], result[5]);
-      fflush(stderr);
-      
-      // 转dB并归一化到[0,1]
-      power_to_db01(result.data(), result.size());
-      
-      // 调试：打印dB01后的统计
-      fprintf(stderr, "🔍 DEBUG mel转dB01后: T=%d, 前6值=[%.3f,%.3f,%.3f,%.3f,%.3f,%.3f]\n", 
-             T, result[0], result[1], result[2], result[3], result[4], result[5]);
-      fflush(stderr);
-    }
+
+  // squeeze 所有 size=1 维
+  auto d = squeeze_dims(raw_dims);
+  if (d.size() != 2 || (d[0] != 32 && d[1] != 32)) {
+    A()->ReleaseValue(out);
+    throw std::runtime_error("mel输出维度异常，期望含有 32 这一维");
   }
-  
+
+  int T = (d[0] == 32) ? (int)d[1] : (int)d[0];
+  std::vector<float> mel32T(32 * (size_t)T);
+
+  // 正确重排到 (32, T)（按 C row-major 线性索引）
+  if (d[0] == 32) {
+    // 内存序等价 (..,32,T,..)-> m*T + t
+    for (int m = 0; m < 32; ++m)
+      for (int t = 0; t < T; ++t)
+        mel32T[m*(size_t)T + t] = buf[m*(size_t)T + t];
+  } else {
+    // 形如 (T,32) -> 线性索引 t*32 + m
+    for (int t = 0; t < T; ++t)
+      for (int m = 0; m < 32; ++m)
+        mel32T[m*(size_t)T + t] = buf[t*32 + m];
+  }
+
+  // 调试（归一化前）
+  {
+    double mean=0, mn=1e30, mx=-1e30;
+    size_t N = mel32T.size();
+    for (size_t i=0;i<N;++i){ mean+=mel32T[i]; mn=std::min<double>(mn,mel32T[i]); mx=std::max<double>(mx,mel32T[i]); }
+    mean/=N;
+    fprintf(stderr, "🔍 mel原始功率: shape=(32,%d) mean=%.6g min=%.6g max=%.6g\n", T, mean, mn, mx);
+  }
+
+  // 与 Notebook 一致的 dB01
+  power_to_db01(mel32T.data(), mel32T.size());
+
+  // 调试（归一化后）
+  {
+    double mean=0, stdv=0; size_t N = mel32T.size();
+    for (size_t i=0;i<N;++i) mean += mel32T[i];
+    mean /= N;
+    for (size_t i=0;i<N;++i) stdv += (mel32T[i]-mean)*(mel32T[i]-mean);
+    stdv = std::sqrt(stdv/N);
+    fprintf(stderr, "🔍 mel dB01: T=%d mean=%.4f std=%.4f first6=[%.3f %.3f %.3f %.3f %.3f %.3f]\n",
+            T, mean, stdv, mel32T[0],mel32T[1],mel32T[2],mel32T[3],mel32T[4],mel32T[5]);
+  }
+
   A()->ReleaseValue(out);
-  return result;
+  return mel32T;
 }
 
 // 运行emb模型，输入NHWC(1,76,32,1)，输出(1,96)
@@ -301,20 +308,21 @@ static int try_detect_three_chain(oww_handle* h){
   fprintf(stderr, "🔍 DEBUG mel帧数: T=%d, need=%d, 音频样本=%zu\n", T, need_frames, oww_handle::NEED_SAMPLES);
   fflush(stderr);
   
-  // 2. 裁剪/补齐到固定大小
+  // 2. 裁剪/补齐到固定大小（改为左补零、右对齐）
   std::vector<float> aligned_mel(32 * need_frames, 0.0f);
   if (T < need_frames) {
-    // 右侧补零
-    memcpy(aligned_mel.data(), mel_data.data(), mel_data.size() * sizeof(float));
+    int off = need_frames - T;  // 在右侧对齐
+    for (int m=0;m<32;++m)
+      memcpy(aligned_mel.data() + m*need_frames + off,
+             mel_data.data() + m*T,
+             T*sizeof(float));
   } else if (T > need_frames) {
-    // 中间裁剪
-    int start = (T - need_frames) / 2;
-    for (int m = 0; m < 32; m++) {
-      memcpy(aligned_mel.data() + m * need_frames, 
-             mel_data.data() + m * T + start, 
-             need_frames * sizeof(float));
-    }
-        } else {
+    int start = (T - need_frames) / 2;  // 仍然居中裁剪
+    for (int m=0;m<32;++m)
+      memcpy(aligned_mel.data() + m*need_frames,
+             mel_data.data() + m*T + start,
+             need_frames*sizeof(float));
+  } else {
     aligned_mel = mel_data;
   }
   
