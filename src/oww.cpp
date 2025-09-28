@@ -142,13 +142,12 @@ void oww_destroy(oww_handle* h){
   delete h;
 }
 
-// 与 Notebook 一致的 power→dB→[0,1]
+// mel输出已经是dB值，直接归一化到[0,1]
 static inline void power_to_db01(float* x, size_t n) {
-  const float eps = 1e-10f;
   for (size_t i = 0; i < n; ++i) {
-    float p  = fmaxf(x[i], eps);
-    float db = 10.f * log10f(p);
-    float y  = (db + 80.f) / 80.f;
+    // mel输出已经是dB值，直接归一化到[0,1]
+    // 假设dB范围约为[-80, +20]，映射到[0,1]
+    float y = (x[i] + 80.f) / 100.f;
     x[i] = y < 0.f ? 0.f : (y > 1.f ? 1.f : y);
   }
 }
