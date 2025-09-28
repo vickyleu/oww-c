@@ -366,7 +366,12 @@ static int try_detect_three_chain(oww_handle* h){
   
   // 计算概率
   float clamped_logit = fmaxf(-40.0f, fminf(40.0f, logit));
-  h->last = 1.0f / (1.0f + expf(-clamped_logit));
+  float exp_val = expf(-clamped_logit);
+  h->last = 1.0f / (1.0f + exp_val);
+  
+  fprintf(stderr, "🔍 DEBUG 概率计算: 原始logit=%.6f, clamp后=%.6f, exp(-clamp)=%.6e, prob=%.12f\n", 
+         logit, clamped_logit, exp_val, h->last);
+  fflush(stderr);
   
   A()->ReleaseValue(out);
   
