@@ -142,12 +142,12 @@ void oww_destroy(oww_handle* h){
   delete h;
 }
 
-// 功率转dB并归一化到[0,1]
+// mel模型输出已经是dB值，直接归一化到[0,1]
 static void power_to_db01(float* data, size_t size) {
-  const float eps = 1e-10f;
   for (size_t i = 0; i < size; i++) {
-    float db = 10.0f * log10f(fmaxf(data[i], eps));
-    data[i] = fmaxf(0.0f, fminf(1.0f, (db + 80.0f) / 80.0f));
+    // mel模型输出已经是dB值，直接归一化到[0,1]
+    // 假设dB范围约为[-80, +20]，映射到[0,1]
+    data[i] = fmaxf(0.0f, fminf(1.0f, (data[i] + 80.0f) / 100.0f));
   }
 }
 
