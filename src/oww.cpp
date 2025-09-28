@@ -44,7 +44,7 @@ struct oww_handle {
   static const int HOP = 160;
   static const int WIN = 400;
   static const int NEED_FRAMES = 16 * 76;  // 1216帧用于完整推理
-  static const int NEED_SAMPLES = 194560;  // 约12秒，确保mel输出1216帧 (1216*160)
+  static const int NEED_SAMPLES = 80000;   // 约5秒，平衡响应速度和mel帧数 (5*16000)
   
   float threshold=0.5f;
   float last=0.0f;
@@ -297,6 +297,9 @@ static int try_detect_three_chain(oww_handle* h){
   
   int T = mel_data.size() / 32;
   int need_frames = h->mel_win * h->nwin;  // 76 * 16 = 1216
+  
+  fprintf(stderr, "🔍 DEBUG mel帧数: T=%d, need=%d, 音频样本=%zu\n", T, need_frames, oww_handle::NEED_SAMPLES);
+  fflush(stderr);
   
   // 2. 裁剪/补齐到固定大小
   std::vector<float> aligned_mel(32 * need_frames, 0.0f);
