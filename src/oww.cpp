@@ -210,6 +210,19 @@ static std::vector<float> run_mel(oww_handle* h, const float* pcm, size_t sample
         }
       }
       
+      // 调试：打印dB01前的原始mel统计
+      float mel_mean = 0.0f, mel_max = -1e9f, mel_min = 1e9f;
+      for (size_t i = 0; i < result.size(); i++) {
+        mel_mean += result[i];
+        mel_max = fmaxf(mel_max, result[i]);
+        mel_min = fminf(mel_min, result[i]);
+      }
+      mel_mean /= result.size();
+      fprintf(stderr, "🔍 DEBUG mel原始功率: size=%zu, mean=%.8f, min=%.8f, max=%.8f, 前6值=[%.8f,%.8f,%.8f,%.8f,%.8f,%.8f]\n", 
+             result.size(), mel_mean, mel_min, mel_max,
+             result[0], result[1], result[2], result[3], result[4], result[5]);
+      fflush(stderr);
+      
       // 转dB并归一化到[0,1]
       power_to_db01(result.data(), result.size());
       
