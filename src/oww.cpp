@@ -45,7 +45,7 @@ struct oww_handle {
   static const int HOP = 160;
   static const int WIN = 400;
   static const int NEED_FRAMES = 16 * 76;  // 1216帧用于完整推理
-  static const int NEED_SAMPLES = 16000;   // 约1秒，快速响应唤醒词 (1*16000)
+  static const int NEED_SAMPLES = 1280;    // 约80ms，与Kotlin推荐块大小匹配
   
   float threshold=0.5f;
   float last=0.0f;
