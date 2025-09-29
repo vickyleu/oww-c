@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <string>
+#include <chrono>
 
 static const OrtApi* A() { return OrtGetApiBase()->GetApi(ORT_API_VERSION); }
 
@@ -392,7 +393,15 @@ static int try_detect_three_chain(oww_handle* h){
          logit, h->last, h->threshold, (h->last >= h->threshold) ? "触发" : "未触发");
   fflush(stderr);
   
-  return (h->last >= h->threshold) ? 1 : 0;
+  // 如果触发，立即清空缓冲区避免重复触发
+  if (h->last >= h->threshold) {
+    fprintf(stderr, "🔄 触发后清空缓冲区，避免重复检测\n");
+    h->pcm_buf.clear();
+    fflush(stderr);
+    return 1;
+  }
+  
+  return 0;
 }
 
 
@@ -419,13 +428,23 @@ int oww_process_i16(oww_handle* h, const short* pcm, size_t samples) {
     fflush(stderr);
   }
   
+  // 触发抑制：防止短时间内重复触发
+  static auto last_trigger_time = std::chrono::steady_clock::now();
+  auto now = std::chrono::steady_clock::now();
+  auto ms_since_trigger = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_trigger_time).count();
+  
   // 优化检测策略：更频繁检测，但需要最少0.5秒数据
   if (h->pcm_buf.size() >= oww_handle::NEED_SAMPLES / 2) {  // 0.5秒最少数据
-    // 每累积0.2秒新数据就尝试检测一次
+    // 每累积0.2秒新数据就尝试检测一次，但有抑制期
     static size_t last_detect_size = 0;
-    if (h->pcm_buf.size() - last_detect_size >= 3200 || h->pcm_buf.size() >= oww_handle::NEED_SAMPLES) {
+    if ((h->pcm_buf.size() - last_detect_size >= 3200 || h->pcm_buf.size() >= oww_handle::NEED_SAMPLES) 
+        && ms_since_trigger >= 1200) {  // 1.2秒抑制期
       last_detect_size = h->pcm_buf.size();
-      return try_detect_three_chain(h);
+      int result = try_detect_three_chain(h);
+      if (result == 1) {
+        last_trigger_time = now;  // 更新触发时间
+      }
+      return result;
     }
   }
   
