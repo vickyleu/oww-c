@@ -476,18 +476,10 @@ static int try_detect_three_chain(oww_handle* h){
 
 // 三链模式的oww_process_i16函数实现
 int oww_process_i16(oww_handle* h, const short* pcm, size_t samples) {
-  static auto start_time = std::chrono::steady_clock::now();
-  static bool first_call = true;
-  auto now = std::chrono::steady_clock::now();
+  static int call_count = 0;
+  call_count++;
   
-  if (first_call) {
-    start_time = now;
-    first_call = false;
-    fprintf(stderr, "🔍 DEBUG 开始音频输入计时\n");
-  }
-  
-  auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - start_time).count();
-  fprintf(stderr, "🔍 DEBUG oww_process_i16被调用: samples=%zu, 累计时间=%ldms\n", samples, elapsed_ms);
+  fprintf(stderr, "🔍 DEBUG oww_process_i16被调用#%d: samples=%zu\n", call_count, samples);
   fflush(stderr);
   
   if (!h || !pcm || samples == 0) return 0;
