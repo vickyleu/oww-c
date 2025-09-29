@@ -45,7 +45,7 @@ struct oww_handle {
   static const int HOP = 160;
   static const int WIN = 400;
   static const int NEED_FRAMES = 16 * 76;  // 1216帧用于完整推理
-  static const int NEED_SAMPLES = 16000;   // ~1.0秒@16kHz，匹配快速说话的"小愚小愚"
+  static const int NEED_SAMPLES = 12000;   // ~0.75秒@16kHz，匹配实际语音长度
   
   float threshold=0.5f;
   float last=0.0f;
