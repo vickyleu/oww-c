@@ -487,7 +487,10 @@ int oww_process_i16(oww_handle* h, const short* pcm, size_t samples) {
   static int call_count = 0;
   call_count++;
   
-  fprintf(stderr, "🔍 DEBUG oww_process_i16被调用#%d: samples=%zu\n", call_count, samples);
+  // 获取当前时间戳（毫秒）
+  auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+    std::chrono::system_clock::now().time_since_epoch()).count();
+  fprintf(stderr, "🔍 DEBUG oww_process_i16被调用#%d: samples=%zu, 时间=%ld\n", call_count, samples, now);
   fflush(stderr);
   
   if (!h || !pcm || samples == 0) return 0;
