@@ -154,6 +154,16 @@ static inline void power_to_db01(float* x, size_t n) {
   }
 }
 
+static inline void db_to_01(float* x, size_t n) {
+  const float inv80 = 1.0f / 80.0f;
+  for (size_t i = 0; i < n; ++i) {
+    float y = (x[i] + 80.0f) * inv80;
+    if (y < 0.0f) y = 0.0f;
+    if (y > 1.0f) y = 1.0f;
+    x[i] = y;
+  }
+}
+
 // 读取 ORT 输出形状，去掉所有 size=1 轴
 static std::vector<int64_t> squeeze_dims(const std::vector<int64_t>& in) {
   std::vector<int64_t> d;
@@ -219,16 +229,25 @@ static std::vector<float> run_mel(oww_handle* h, const float* pcm, size_t sample
   }
 
   // 调试（归一化前）
+  double mean=0, mn=1e30, mx=-1e30;
   {
-    double mean=0, mn=1e30, mx=-1e30;
     size_t N = mel32T.size();
     for (size_t i=0;i<N;++i){ mean+=mel32T[i]; mn=std::min<double>(mn,mel32T[i]); mx=std::max<double>(mx,mel32T[i]); }
     mean/=N;
     fprintf(stderr, "🔍 mel原始功率: shape=(32,%d) mean=%.6g min=%.6g max=%.6g\n", T, mean, mn, mx);
+    fflush(stderr);
   }
 
-  // 与 Notebook 一致的 dB01
-  power_to_db01(mel32T.data(), mel32T.size());
+  bool has_negative = (mn < 0.0);
+  if (has_negative) {
+    fprintf(stderr, "🔍 mel已是dB刻度，直接归一化到[0,1]\n");
+    fflush(stderr);
+    db_to_01(mel32T.data(), mel32T.size());
+  } else {
+    fprintf(stderr, "🔍 mel为功率谱，执行power→dB→[0,1]\n");
+    fflush(stderr);
+    power_to_db01(mel32T.data(), mel32T.size());
+  }
 
   // 调试（归一化后）
   {
@@ -305,42 +324,52 @@ static int try_detect_three_chain(oww_handle* h){
     return 0;
   }
   
-  int T = mel_data.size() / 32;
-  int need_frames = h->mel_win * h->nwin;  // 76 * 16 = 1216
-  
-  fprintf(stderr, "🔍 DEBUG mel帧数: T=%d, need=%d, 音频样本=%zu\n", T, need_frames, actual_samples);
-  fflush(stderr);
-  
-  // 2. 裁剪/补齐到固定大小（改为左补零、右对齐）
-  std::vector<float> aligned_mel(32 * need_frames, 0.0f);
-  if (T < need_frames) {
-    int off = need_frames - T;  // 在右侧对齐
-    for (int m=0;m<32;++m)
-      memcpy(aligned_mel.data() + m*need_frames + off,
-             mel_data.data() + m*T,
-             T*sizeof(float));
-  } else if (T > need_frames) {
-    int start = (T - need_frames) / 2;  // 仍然居中裁剪
-    for (int m=0;m<32;++m)
-      memcpy(aligned_mel.data() + m*need_frames,
-             mel_data.data() + m*T + start,
-             need_frames*sizeof(float));
-        } else {
-    aligned_mel = mel_data;
+  const int mel_bins = h->mel_bins;
+  int T = mel_data.size() / mel_bins;
+
+  if (T < h->mel_win) {
+    fprintf(stderr, "🛑 DEBUG mel帧不足: T=%d < mel_win=%d\n", T, h->mel_win);
+    fflush(stderr);
+    return 0;
   }
-  
-  // 3. 逐窗运行emb模型
+
+  const int segments = (h->nwin > 1) ? (h->nwin - 1) : 0;
+  const int extra_frames = T - h->mel_win;
+  int hop = 1;
+  if (segments > 0 && extra_frames > 0) {
+    hop = std::max(1, extra_frames / segments);
+  }
+  int span = h->mel_win + hop * segments;
+  int start0 = (T > span) ? (T - span) : 0;
+
+  int last_start = start0 + hop * segments;
+  if (last_start + h->mel_win > T) {
+    last_start = T - h->mel_win;
+  }
+
+  fprintf(stderr,
+          "🔍 DEBUG mel帧: T=%d, mel_win=%d, hop=%d, span=%d, start0=%d, start_last=%d, audio=%zu\n",
+          T, h->mel_win, hop, span, start0, last_start, actual_samples);
+  fflush(stderr);
+
+  // 3. 逐窗运行emb模型（根据实际Mel帧动态滑动）
   std::vector<float> emb_features(h->nwin * 96);
+  std::vector<float> window(h->mel_win * mel_bins);
+
   for (int i = 0; i < h->nwin; i++) {
-    // 提取窗口 (32, 76) -> 转置为 (76, 32)
-    std::vector<float> window(76 * 32);
+    int start = start0 + i * hop;
+    if (start + h->mel_win > T) {
+      start = T - h->mel_win;
+    }
+
     for (int t = 0; t < h->mel_win; t++) {
-      for (int m = 0; m < 32; m++) {
-        window[t * 32 + m] = aligned_mel[m * need_frames + i * h->mel_win + t];
+      const int src_t = start + t;
+      const size_t dst_row = t * (size_t)mel_bins;
+      for (int m = 0; m < mel_bins; m++) {
+        window[dst_row + m] = mel_data[m * (size_t)T + src_t];
       }
     }
-    
-    // 运行emb模型
+
     std::vector<float> emb_out = run_emb_window(h, window.data());
     memcpy(emb_features.data() + i * 96, emb_out.data(), 96 * sizeof(float));
   }
