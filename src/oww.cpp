@@ -146,14 +146,12 @@ void oww_destroy(oww_handle* h){
   delete h;
 }
 
-// 与 Notebook 一致的 power→dB→[0,1]
+// ★ 修复：mel模型输出已是dB值，直接归一化到[0,1]
 static inline void power_to_db01(float* x, size_t n) {
-  const float eps = 1e-10f;
+  // 输入已是dB值（如-46.9288），直接做[0,1]归一化
   for (size_t i = 0; i < n; ++i) {
-    float p  = fmaxf(x[i], eps);
-    float db = 10.f * log10f(p);
-    float y  = (db + 80.f) / 80.f;
-    x[i] = y < 0.f ? 0.f : (y > 1.f ? 1.f : y);
+    float y = (x[i] + 80.0f) / 80.0f;
+    x[i] = y < 0.0f ? 0.0f : (y > 1.0f ? 1.0f : y);
   }
 }
 
@@ -243,8 +241,8 @@ static std::vector<float> run_mel(oww_handle* h, const float* pcm, size_t sample
 
   // ★ 修复：根据colab训练规格，总是执行power→dB→[0,1]归一化
   fprintf(stderr, "🔍 mel统一执行power→dB→[0,1]归一化（匹配训练规格）\n");
-  fflush(stderr);
-  power_to_db01(mel32T.data(), mel32T.size());
+    fflush(stderr);
+    power_to_db01(mel32T.data(), mel32T.size());
 
   // 调试（归一化后）
   {
