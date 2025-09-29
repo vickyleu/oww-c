@@ -243,6 +243,18 @@ static std::vector<float> run_mel(oww_handle* h, const float* pcm, size_t sample
     fflush(stderr);
   }
 
+  // 调试（归一化前）
+  {
+    double mean=0, stdv=0; size_t N = mel32T.size();
+    for (size_t i=0;i<N;++i) mean += mel32T[i];
+    mean /= N;
+    for (size_t i=0;i<N;++i) stdv += (mel32T[i]-mean)*(mel32T[i]-mean);
+    stdv = std::sqrt(stdv/N);
+    fprintf(stderr, "🔍 mel原始输出: T=%d mean=%.6f std=%.6f first6=[%.3f %.3f %.3f %.3f %.3f %.3f]\n",
+            T, mean, stdv, mel32T[0],mel32T[1],mel32T[2],mel32T[3],mel32T[4],mel32T[5]);
+    fflush(stderr);
+  }
+
   // ★ 修复：根据colab训练规格，总是执行power→dB→[0,1]归一化
   fprintf(stderr, "🔍 mel统一执行power→dB→[0,1]归一化（匹配训练规格）\n");
     fflush(stderr);
