@@ -45,7 +45,7 @@ struct oww_handle {
   static const int HOP = 160;
   static const int WIN = 400;
   static const int NEED_FRAMES = 16 * 76;  // 1216帧用于完整推理
-  static const int NEED_SAMPLES = 12000;   // ~0.75秒@16kHz，匹配实际语音长度
+  int need_samples = 12000;   // 默认0.75秒@16kHz，可通过oww_set_buffer_size调整
   
   float threshold=0.5f;
   float last=0.0f;
@@ -140,6 +140,14 @@ float oww_last_score(const oww_handle* h){
 
 size_t oww_recommended_chunk(){ 
   return 1280; // ~80ms@16k
+}
+
+void oww_set_buffer_size(oww_handle* h, size_t samples) {
+  if (h && samples > 0) {
+    h->need_samples = (int)samples;
+    fprintf(stderr, "🔧 设置oww缓冲区大小: %zu样本 = %.3fs\n", samples, samples / 16000.0);
+    fflush(stderr);
+  }
 }
 
 void oww_destroy(oww_handle* h){
@@ -308,9 +316,9 @@ static std::vector<float> run_emb_window(oww_handle* h, const float* mel_window)
 
 // 三链检测：mel -> emb -> cls
 static int try_detect_three_chain(oww_handle* h){
-  // 动态调整数据量：优先使用NEED_SAMPLES，最少接受一半数据
-  size_t actual_samples = std::min(h->pcm_buf.size(), (size_t)oww_handle::NEED_SAMPLES);
-  if (actual_samples < oww_handle::NEED_SAMPLES / 2) {
+  // 动态调整数据量：优先使用need_samples，最少接受一半数据
+  size_t actual_samples = std::min(h->pcm_buf.size(), (size_t)h->need_samples);
+  if (actual_samples < h->need_samples / 2) {
     return 0; // PCM数据不足（至少需要0.5秒）
   }
   
@@ -490,7 +498,7 @@ int oww_process_i16(oww_handle* h, const short* pcm, size_t samples) {
   }
   
   // 保持缓冲区大小 - 合理的滑动窗口
-  while (h->pcm_buf.size() > oww_handle::NEED_SAMPLES + 3200) {  // 额外0.2秒缓冲
+  while (h->pcm_buf.size() > h->need_samples + 3200) {  // 额外0.2秒缓冲
     h->pcm_buf.pop_front();
   }
   
@@ -498,20 +506,20 @@ int oww_process_i16(oww_handle* h, const short* pcm, size_t samples) {
   static int debug_counter = 0;
   if (++debug_counter % 10 == 0) {
     fprintf(stderr, "🔍 三链缓冲区状态: %zu/%d 样本 (%.1f%%)\n", 
-           h->pcm_buf.size(), oww_handle::NEED_SAMPLES, 
-           100.0f * h->pcm_buf.size() / oww_handle::NEED_SAMPLES);
+           h->pcm_buf.size(), h->need_samples, 
+           100.0f * h->pcm_buf.size() / h->need_samples);
   fflush(stderr);
   }
   
   // 调试缓冲区状态
   double buffer_seconds = (double)h->pcm_buf.size() / 16000.0;
-  double need_seconds = (double)oww_handle::NEED_SAMPLES / 16000.0;
+  double need_seconds = (double)h->need_samples / 16000.0;
   fprintf(stderr, "🔍 缓冲区状态: %zu/%d样本 = %.3fs/%.3fs\n", 
-          h->pcm_buf.size(), oww_handle::NEED_SAMPLES, buffer_seconds, need_seconds);
+          h->pcm_buf.size(), h->need_samples, buffer_seconds, need_seconds);
   fflush(stderr);
   
   // 简化检测：有足够数据就检测
-  if (h->pcm_buf.size() >= oww_handle::NEED_SAMPLES) {
+  if (h->pcm_buf.size() >= h->need_samples) {
     fprintf(stderr, "🔍 开始检测: 缓冲区=%zu样本\n", h->pcm_buf.size());
     fflush(stderr);
     
@@ -521,7 +529,7 @@ int oww_process_i16(oww_handle* h, const short* pcm, size_t samples) {
     
     return result;
   } else {
-    fprintf(stderr, "🔍 缓冲区不足，需要%d，当前%zu\n", oww_handle::NEED_SAMPLES, h->pcm_buf.size());
+    fprintf(stderr, "🔍 缓冲区不足，需要%d，当前%zu\n", h->need_samples, h->pcm_buf.size());
     fflush(stderr);
   }
   

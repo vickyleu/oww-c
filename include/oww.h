@@ -27,6 +27,9 @@ float oww_last_score(const oww_handle* h);
 /** 每个输入块建议大小（样本数，约等于80ms=1280） */
 size_t oww_recommended_chunk();
 
+/** 设置检测所需的最小缓冲区大小（样本数） */
+void oww_set_buffer_size(oww_handle* h, size_t samples);
+
 /** 销毁 */
 void oww_destroy(oww_handle* h);
 
