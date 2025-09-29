@@ -49,6 +49,8 @@ struct oww_handle {
   
   float threshold=0.5f;
   float last=0.0f;
+  int consec_hits=0;
+  int consec_required=2;
   
   // 环形缓冲区 - 扩大到支持完整的mel输入
   std::deque<float> pcm_buf;       // 原始PCM float，容量约195k
@@ -129,6 +131,7 @@ oww_handle* oww_create(const char* mel_onnx,
 void oww_reset(oww_handle* h){
   h->pcm_buf.clear(); 
   h->last=0.0f;
+  h->consec_hits=0;
 }
 
 float oww_last_score(const oww_handle* h){ 
@@ -418,13 +421,22 @@ static int try_detect_three_chain(oww_handle* h){
   
   A()->ReleaseValue(out);
   
-  fprintf(stderr, "🔍 三链唤醒检测: logit=%.6f, prob=%.12f, 阈值=%.6f, 结果=%s\n", 
-         logit, h->last, h->threshold, (h->last >= h->threshold) ? "触发" : "未触发");
+  if (h->last >= h->threshold) {
+    h->consec_hits++;
+  } else if (h->consec_hits > 0) {
+    h->consec_hits = 0;
+  }
+
+  fprintf(stderr,
+          "🔍 三链唤醒检测: logit=%.6f, prob=%.12f, 阈值=%.6f, consec=%d/%d, 结果=%s\n",
+          logit, h->last, h->threshold, h->consec_hits, h->consec_required,
+          (h->consec_hits >= h->consec_required) ? "触发" : "未触发");
   fflush(stderr);
   
-  // 如果触发，立即清空缓冲区避免重复触发
-  if (h->last >= h->threshold) {
-    fprintf(stderr, "🔄 触发后清空缓冲区，避免重复检测\n");
+  // 如果达到连续触发要求，立即清空缓冲区避免重复触发
+  if (h->consec_hits >= h->consec_required) {
+    h->consec_hits = 0;
+    fprintf(stderr, "🔄 连续命中阈值，清空缓冲区\n");
     h->pcm_buf.clear();
     fflush(stderr);
     return 1;
