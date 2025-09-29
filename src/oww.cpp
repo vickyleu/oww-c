@@ -437,14 +437,21 @@ int oww_process_i16(oww_handle* h, const short* pcm, size_t samples) {
   if (h->pcm_buf.size() >= oww_handle::NEED_SAMPLES / 2) {  // 0.5秒最少数据
     // 每累积0.2秒新数据就尝试检测一次，但有抑制期
     static size_t last_detect_size = 0;
-    if ((h->pcm_buf.size() - last_detect_size >= 3200 || h->pcm_buf.size() >= oww_handle::NEED_SAMPLES) 
-        && ms_since_trigger >= 1200) {  // 1.2秒抑制期
-      last_detect_size = h->pcm_buf.size();
-      int result = try_detect_three_chain(h);
-      if (result == 1) {
-        last_trigger_time = now;  // 更新触发时间
+    if (h->pcm_buf.size() - last_detect_size >= 3200 || h->pcm_buf.size() >= oww_handle::NEED_SAMPLES) {
+      if (ms_since_trigger >= 1200) {  // 1.2秒抑制期
+        last_detect_size = h->pcm_buf.size();
+        int result = try_detect_three_chain(h);
+        if (result == 1) {
+          last_trigger_time = now;  // 更新触发时间
+          fprintf(stderr, "🎯 触发成功，更新抑制时间\n");
+          fflush(stderr);
+        }
+        return result;
+      } else {
+        fprintf(stderr, "🚫 抑制期内，跳过检测 (距离上次触发: %ldms)\n", ms_since_trigger);
+        fflush(stderr);
+        return 0;
       }
-      return result;
     }
   }
   
