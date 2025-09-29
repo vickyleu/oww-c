@@ -429,8 +429,15 @@ int oww_process_i16(oww_handle* h, const short* pcm, size_t samples) {
   }
   
   // 触发抑制：防止短时间内重复触发
-  static auto last_trigger_time = std::chrono::steady_clock::now();
+  static auto last_trigger_time = std::chrono::steady_clock::time_point{};  // 默认初始化为epoch
+  static bool first_call = true;
   auto now = std::chrono::steady_clock::now();
+  
+  if (first_call) {
+    last_trigger_time = now - std::chrono::milliseconds(2000);  // 初始化为2秒前，允许第一次检测
+    first_call = false;
+  }
+  
   auto ms_since_trigger = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_trigger_time).count();
   
   // 优化检测策略：更频繁检测，但需要最少0.5秒数据
