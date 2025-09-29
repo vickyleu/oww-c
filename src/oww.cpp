@@ -476,6 +476,8 @@ static int try_detect_three_chain(oww_handle* h){
 
 // 三链模式的oww_process_i16函数实现
 int oww_process_i16(oww_handle* h, const short* pcm, size_t samples) {
+  fprintf(stderr, "🔍 DEBUG oww_process_i16被调用: samples=%zu\n", samples);
+  fflush(stderr);
   if (!h || !pcm || samples == 0) return 0;
   
   // 将int16 PCM转换为float并添加到缓冲区
