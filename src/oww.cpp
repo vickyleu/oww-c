@@ -243,9 +243,9 @@ static std::vector<float> run_mel(oww_handle* h, const float* pcm, size_t sample
 
   bool has_negative = (mn < 0.0);
   if (has_negative) {
-    fprintf(stderr, "🔍 mel已是dB刻度，直接归一化到[0,1]\n");
+    fprintf(stderr, "🔍 mel已是dB刻度，直接使用原始值（不再归一化）\n");
     fflush(stderr);
-    db_to_01(mel32T.data(), mel32T.size());
+    // 已经是dB格式的mel输出，直接使用，不做归一化处理
   } else {
     fprintf(stderr, "🔍 mel为功率谱，执行power→dB→[0,1]\n");
     fflush(stderr);
