@@ -50,7 +50,7 @@ struct oww_handle {
   float threshold=0.5f;
   float last=0.0f;
   int consec_hits=0;
-  int consec_required=2;
+  int consec_required=4;
   
   // 环形缓冲区 - 扩大到支持完整的mel输入
   std::deque<float> pcm_buf;       // 原始PCM float，容量约195k
@@ -336,11 +336,18 @@ static int try_detect_three_chain(oww_handle* h){
     return 0;
   }
 
+  const int min_frames_for_sequence = h->mel_win + 8;
+  if (T < min_frames_for_sequence) {
+    fprintf(stderr, "🛑 DEBUG mel帧不足额外上下文: T=%d < %d, skip emb/cls\n", T, min_frames_for_sequence);
+    fflush(stderr);
+    return 0;
+  }
+
   const int segments = (h->nwin > 1) ? (h->nwin - 1) : 0;
   const int extra_frames = T - h->mel_win;
-  int hop = 1;
+  int hop = 2;
   if (segments > 0 && extra_frames > 0) {
-    hop = std::max(1, extra_frames / segments);
+    hop = std::max(2, extra_frames / segments);
   }
   int span = h->mel_win + hop * segments;
   int start0 = (T > span) ? (T - span) : 0;
@@ -496,7 +503,7 @@ int oww_process_i16(oww_handle* h, const short* pcm, size_t samples) {
               h->pcm_buf.size(), last_detect_size, h->pcm_buf.size() - last_detect_size, ms_since_trigger);
       fflush(stderr);
       
-      if (ms_since_trigger >= 1200) {  // 1.2秒抑制期
+      if (ms_since_trigger >= 1500) {  // 1.5秒抑制期
         last_detect_size = h->pcm_buf.size();
         int result = try_detect_three_chain(h);
         if (result == 1) {
