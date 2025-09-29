@@ -444,7 +444,17 @@ int oww_process_i16(oww_handle* h, const short* pcm, size_t samples) {
   if (h->pcm_buf.size() >= oww_handle::NEED_SAMPLES / 2) {  // 0.5秒最少数据
     // 每累积0.2秒新数据就尝试检测一次，但有抑制期
     static size_t last_detect_size = 0;
+    
+    // 如果缓冲区被清空了，重置detect size
+    if (h->pcm_buf.size() < last_detect_size) {
+      last_detect_size = 0;
+    }
+    
     if (h->pcm_buf.size() - last_detect_size >= 3200 || h->pcm_buf.size() >= oww_handle::NEED_SAMPLES) {
+      fprintf(stderr, "🔍 检测条件: buf_size=%zu, last_detect=%zu, diff=%zu, trigger_gap=%ldms\n", 
+              h->pcm_buf.size(), last_detect_size, h->pcm_buf.size() - last_detect_size, ms_since_trigger);
+      fflush(stderr);
+      
       if (ms_since_trigger >= 1200) {  // 1.2秒抑制期
         last_detect_size = h->pcm_buf.size();
         int result = try_detect_three_chain(h);
