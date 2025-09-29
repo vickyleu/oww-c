@@ -28,7 +28,7 @@ float oww_last_score(const oww_handle* h);
 size_t oww_recommended_chunk();
 
 /** 设置检测所需的最小缓冲区大小（样本数） */
-void oww_set_buffer_size(oww_handle* h, size_t samples);
+void oww_set_buffer_size(oww_handle* h, size_t min_samples, size_t max_samples);
 
 /** 销毁 */
 void oww_destroy(oww_handle* h);
