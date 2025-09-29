@@ -499,48 +499,16 @@ int oww_process_i16(oww_handle* h, const short* pcm, size_t samples) {
   fflush(stderr);
   }
   
-  // 触发抑制：防止短时间内重复触发
-  static auto last_trigger_time = std::chrono::steady_clock::time_point{};  // 默认初始化为epoch
-  static bool first_call = true;
-  auto now = std::chrono::steady_clock::now();
-  
-  if (first_call) {
-    last_trigger_time = now - std::chrono::milliseconds(2000);  // 初始化为2秒前，允许第一次检测
-    first_call = false;
-  }
-  
-  auto ms_since_trigger = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_trigger_time).count();
-  
-  // 优化检测策略：更频繁检测，但需要最少0.5秒数据
-  if (h->pcm_buf.size() >= oww_handle::NEED_SAMPLES / 2) {  // 0.5秒最少数据
-    // 每累积0.2秒新数据就尝试检测一次，但有抑制期
-    static size_t last_detect_size = 0;
-    
-    // 如果缓冲区被清空了，重置detect size
-    if (h->pcm_buf.size() < last_detect_size) {
-      last_detect_size = 0;
-    }
-    
-    if (h->pcm_buf.size() - last_detect_size >= 3200 || h->pcm_buf.size() >= oww_handle::NEED_SAMPLES) {
-      fprintf(stderr, "🔍 检测条件: buf_size=%zu, last_detect=%zu, diff=%zu, trigger_gap=%ldms\n", 
-              h->pcm_buf.size(), last_detect_size, h->pcm_buf.size() - last_detect_size, ms_since_trigger);
+  // 简化检测：有足够数据就检测
+  if (h->pcm_buf.size() >= oww_handle::NEED_SAMPLES) {
+    fprintf(stderr, "🔍 开始检测: 缓冲区=%zu样本\n", h->pcm_buf.size());
     fflush(stderr);
     
-      if (ms_since_trigger >= 1500) {  // 1.5秒抑制期
-        last_detect_size = h->pcm_buf.size();
-        int result = try_detect_three_chain(h);
-        if (result == 1) {
-          last_trigger_time = now;  // 更新触发时间
-          fprintf(stderr, "🎯 触发成功，更新抑制时间\n");
+    int result = try_detect_three_chain(h);
+    fprintf(stderr, "🔍 检测结果: %d\n", result);
     fflush(stderr);
-        }
-        return result;
-      } else {
-        fprintf(stderr, "🚫 抑制期内，跳过检测 (距离上次触发: %ldms)\n", ms_since_trigger);
-    fflush(stderr);
-        return 0;
-      }
-    }
+    
+    return result;
   }
   
   return 0;
