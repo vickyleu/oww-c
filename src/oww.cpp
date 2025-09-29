@@ -175,6 +175,8 @@ static std::vector<int64_t> squeeze_dims(const std::vector<int64_t>& in) {
 
 // 运行 mel：输入 [1, samples]，输出强制重排到 (32, T) 并做 dB01
 static std::vector<float> run_mel(oww_handle* h, const float* pcm, size_t samples){
+  fprintf(stderr, "🔍 DEBUG 进入run_mel函数: samples=%zu\n", samples);
+  fflush(stderr);
   OrtMemoryInfo* mi=nullptr; 
   oww_handle::ORTCHK(A()->CreateCpuMemoryInfo(OrtArenaAllocator, OrtMemTypeDefault, &mi));
   
