@@ -337,40 +337,53 @@ static int try_detect_three_chain(oww_handle* h){
     return 0;
   }
 
-  const int segments = (h->nwin > 1) ? (h->nwin - 1) : 0;
-  const int extra_frames = T - h->mel_win;
-  int hop = 2;
-  if (segments > 0 && extra_frames > 0) {
-    hop = std::max(2, extra_frames / segments);
-  }
-  int span = h->mel_win + hop * segments;
-  int start0 = (T > span) ? (T - span) : 0;
-
-  int last_start = start0 + hop * segments;
-  if (last_start + h->mel_win > T) {
-    last_start = T - h->mel_win;
+  // ★ 修复：使用colab训练的固定hop=76策略（无重叠连续窗口）
+  const int hop = h->mel_win; // hop = 76，与训练规格一致
+  const int need_frames = h->nwin * hop; // 16 × 76 = 1216帧
+  
+  // 数据预处理：匹配colab训练的填充/裁剪策略
+  std::vector<float> processed_mel;
+  if (T < need_frames) {
+    // 数据不足：右侧补零
+    processed_mel.resize(mel_bins * need_frames, 0.0f);
+    for (int m = 0; m < mel_bins; m++) {
+      for (int t = 0; t < T; t++) {
+        processed_mel[m * need_frames + t] = mel_data[m * T + t];
+      }
+      // 剩余帧已经初始化为0，无需额外处理
+    }
+  } else if (T > need_frames) {
+    // 数据过多：中间裁剪
+    const int start_offset = (T - need_frames) / 2;
+    processed_mel.resize(mel_bins * need_frames);
+    for (int m = 0; m < mel_bins; m++) {
+      for (int t = 0; t < need_frames; t++) {
+        processed_mel[m * need_frames + t] = mel_data[m * T + (start_offset + t)];
+      }
+    }
+  } else {
+    // 数据恰好：直接复制
+    processed_mel = mel_data;
   }
 
   fprintf(stderr,
-          "🔍 DEBUG mel帧: T=%d, mel_win=%d, hop=%d, span=%d, start0=%d, start_last=%d, audio=%zu\n",
-          T, h->mel_win, hop, span, start0, last_start, actual_samples);
+          "🔍 DEBUG 固定hop策略: T=%d→%d, mel_win=%d, hop=%d, need=%d, audio=%zu\n",
+          T, need_frames, h->mel_win, hop, need_frames, actual_samples);
   fflush(stderr);
 
-  // 3. 逐窗运行emb模型（根据实际Mel帧动态滑动）
+  // 3. 逐窗运行emb模型（固定hop=76，无重叠连续窗口）
   std::vector<float> emb_features(h->nwin * 96);
   std::vector<float> window(h->mel_win * mel_bins);
 
   for (int i = 0; i < h->nwin; i++) {
-    int start = start0 + i * hop;
-    if (start + h->mel_win > T) {
-      start = T - h->mel_win;
-    }
+    // 固定hop策略：第i个窗口从 i*hop 开始，长度为mel_win
+    const int start = i * hop;
 
     for (int t = 0; t < h->mel_win; t++) {
       const int src_t = start + t;
       const size_t dst_row = t * (size_t)mel_bins;
       for (int m = 0; m < mel_bins; m++) {
-        window[dst_row + m] = mel_data[m * (size_t)T + src_t];
+        window[dst_row + m] = processed_mel[m * (size_t)need_frames + src_t];
       }
     }
 
