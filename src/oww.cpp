@@ -499,6 +499,10 @@ int oww_process_i16(oww_handle* h, const short* pcm, size_t samples) {
   fflush(stderr);
   }
   
+  // 调试缓冲区状态
+  fprintf(stderr, "🔍 缓冲区状态: %zu/%d样本\n", h->pcm_buf.size(), oww_handle::NEED_SAMPLES);
+  fflush(stderr);
+  
   // 简化检测：有足够数据就检测
   if (h->pcm_buf.size() >= oww_handle::NEED_SAMPLES) {
     fprintf(stderr, "🔍 开始检测: 缓冲区=%zu样本\n", h->pcm_buf.size());
@@ -509,6 +513,9 @@ int oww_process_i16(oww_handle* h, const short* pcm, size_t samples) {
     fflush(stderr);
     
     return result;
+  } else {
+    fprintf(stderr, "🔍 缓冲区不足，需要%d，当前%zu\n", oww_handle::NEED_SAMPLES, h->pcm_buf.size());
+    fflush(stderr);
   }
   
   return 0;
