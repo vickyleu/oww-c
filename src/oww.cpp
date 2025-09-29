@@ -44,7 +44,7 @@ struct oww_handle {
   static const int HOP = 160;
   static const int WIN = 400;
   static const int NEED_FRAMES = 16 * 76;  // 1216帧用于完整推理
-  static const int NEED_SAMPLES = 32000;   // 约2秒，快速响应唤醒词 (2*16000)
+  static const int NEED_SAMPLES = 16000;   // 约1秒，快速响应唤醒词 (1*16000)
   
   float threshold=0.5f;
   float last=0.0f;
@@ -165,7 +165,7 @@ static std::vector<int64_t> squeeze_dims(const std::vector<int64_t>& in) {
 static std::vector<float> run_mel(oww_handle* h, const float* pcm, size_t samples){
   OrtMemoryInfo* mi=nullptr; 
   oww_handle::ORTCHK(A()->CreateCpuMemoryInfo(OrtArenaAllocator, OrtMemTypeDefault, &mi));
-
+  
   // in: [1, N]
   OrtValue* in=nullptr;
   const int64_t in_shape[2] = {1, (int64_t)samples};
@@ -173,7 +173,7 @@ static std::vector<float> run_mel(oww_handle* h, const float* pcm, size_t sample
       mi, (void*)pcm, samples*sizeof(float), in_shape, 2,
       ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, &in));
   A()->ReleaseMemoryInfo(mi);
-
+  
   // run
   const char* in_names[]  = {h->ort.mel_in0.c_str()};
   const char* out_names[] = {h->ort.mel_out0.c_str()};
@@ -182,7 +182,7 @@ static std::vector<float> run_mel(oww_handle* h, const float* pcm, size_t sample
                               (const OrtValue* const*)&in, 1,
                               out_names, 1, &out));
   A()->ReleaseValue(in);
-
+  
   // get buffer + dims
   float* buf=nullptr; 
   oww_handle::ORTCHK(A()->GetTensorMutableData(out, (void**)&buf));
@@ -193,7 +193,7 @@ static std::vector<float> run_mel(oww_handle* h, const float* pcm, size_t sample
   std::vector<int64_t> raw_dims(dim_count);
   oww_handle::ORTCHK(A()->GetDimensions(info, raw_dims.data(), dim_count));
   A()->ReleaseTensorTypeAndShapeInfo(info);
-
+  
   // squeeze 所有 size=1 维
   auto d = squeeze_dims(raw_dims);
   if (d.size() != 2 || (d[0] != 32 && d[1] != 32)) {
@@ -239,7 +239,7 @@ static std::vector<float> run_mel(oww_handle* h, const float* pcm, size_t sample
     fprintf(stderr, "🔍 mel dB01: T=%d mean=%.4f std=%.4f first6=[%.3f %.3f %.3f %.3f %.3f %.3f]\n",
             T, mean, stdv, mel32T[0],mel32T[1],mel32T[2],mel32T[3],mel32T[4],mel32T[5]);
   }
-
+  
   A()->ReleaseValue(out);
   return mel32T;
 }
@@ -277,13 +277,15 @@ static std::vector<float> run_emb_window(oww_handle* h, const float* mel_window)
 
 // 三链检测：mel -> emb -> cls
 static int try_detect_three_chain(oww_handle* h){
-  if (h->pcm_buf.size() < oww_handle::NEED_SAMPLES) {
-    return 0; // PCM数据不足
+  // 动态调整数据量：优先使用NEED_SAMPLES，最少接受一半数据
+  size_t actual_samples = std::min(h->pcm_buf.size(), (size_t)oww_handle::NEED_SAMPLES);
+  if (actual_samples < oww_handle::NEED_SAMPLES / 2) {
+    return 0; // PCM数据不足（至少需要0.5秒）
   }
   
-  // 1. 运行mel模型 - 使用完整的NEED_SAMPLES
-  std::vector<float> pcm_data(oww_handle::NEED_SAMPLES);
-  std::copy(h->pcm_buf.end() - oww_handle::NEED_SAMPLES, h->pcm_buf.end(), pcm_data.begin());
+  // 1. 运行mel模型 - 使用实际可用的数据量
+  std::vector<float> pcm_data(actual_samples);
+  std::copy(h->pcm_buf.end() - actual_samples, h->pcm_buf.end(), pcm_data.begin());
   std::vector<float> mel_data = run_mel(h, pcm_data.data(), pcm_data.size());
   
   // 调试：打印mel数据统计
@@ -305,7 +307,7 @@ static int try_detect_three_chain(oww_handle* h){
   int T = mel_data.size() / 32;
   int need_frames = h->mel_win * h->nwin;  // 76 * 16 = 1216
   
-  fprintf(stderr, "🔍 DEBUG mel帧数: T=%d, need=%d, 音频样本=%zu\n", T, need_frames, oww_handle::NEED_SAMPLES);
+  fprintf(stderr, "🔍 DEBUG mel帧数: T=%d, need=%d, 音频样本=%zu\n", T, need_frames, actual_samples);
   fflush(stderr);
   
   // 2. 裁剪/补齐到固定大小（改为左补零、右对齐）
@@ -322,7 +324,7 @@ static int try_detect_three_chain(oww_handle* h){
       memcpy(aligned_mel.data() + m*need_frames,
              mel_data.data() + m*T + start,
              need_frames*sizeof(float));
-  } else {
+        } else {
     aligned_mel = mel_data;
   }
   
@@ -417,9 +419,14 @@ int oww_process_i16(oww_handle* h, const short* pcm, size_t samples) {
     fflush(stderr);
   }
   
-  // 如果缓冲区足够大，尝试检测
-  if (h->pcm_buf.size() >= oww_handle::NEED_SAMPLES) {
-    return try_detect_three_chain(h);
+  // 优化检测策略：更频繁检测，但需要最少0.5秒数据
+  if (h->pcm_buf.size() >= oww_handle::NEED_SAMPLES / 2) {  // 0.5秒最少数据
+    // 每累积0.2秒新数据就尝试检测一次
+    static size_t last_detect_size = 0;
+    if (h->pcm_buf.size() - last_detect_size >= 3200 || h->pcm_buf.size() >= oww_handle::NEED_SAMPLES) {
+      last_detect_size = h->pcm_buf.size();
+      return try_detect_three_chain(h);
+    }
   }
   
   return 0;
