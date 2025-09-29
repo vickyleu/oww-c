@@ -146,12 +146,14 @@ void oww_destroy(oww_handle* h){
   delete h;
 }
 
-// ★ 修复：mel模型输出已是dB值，直接归一化到[0,1]
+// 与ipynb完全一致的power→dB→[0,1]转换
 static inline void power_to_db01(float* x, size_t n) {
-  // 输入已是dB值（如-46.9288），直接做[0,1]归一化
+  const float eps = 1e-10f;
   for (size_t i = 0; i < n; ++i) {
-    float y = (x[i] + 80.0f) / 80.0f;
-    x[i] = y < 0.0f ? 0.0f : (y > 1.0f ? 1.0f : y);
+    float p  = fmaxf(x[i], eps);
+    float db = 10.f * log10f(p);
+    float y  = (db + 80.f) / 80.f;
+    x[i] = y < 0.f ? 0.f : (y > 1.f ? 1.f : y);
   }
 }
 
