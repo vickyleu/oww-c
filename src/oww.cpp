@@ -241,16 +241,10 @@ static std::vector<float> run_mel(oww_handle* h, const float* pcm, size_t sample
     fflush(stderr);
   }
 
-  bool has_negative = (mn < 0.0);
-  if (has_negative) {
-    fprintf(stderr, "🔍 mel已是dB刻度，直接使用原始值（不再归一化）\n");
-    fflush(stderr);
-    // 已经是dB格式的mel输出，直接使用，不做归一化处理
-  } else {
-    fprintf(stderr, "🔍 mel为功率谱，执行power→dB→[0,1]\n");
-    fflush(stderr);
-    power_to_db01(mel32T.data(), mel32T.size());
-  }
+  // ★ 修复：根据colab训练规格，总是执行power→dB→[0,1]归一化
+  fprintf(stderr, "🔍 mel统一执行power→dB→[0,1]归一化（匹配训练规格）\n");
+  fflush(stderr);
+  power_to_db01(mel32T.data(), mel32T.size());
 
   // 调试（归一化后）
   {
@@ -473,7 +467,7 @@ int oww_process_i16(oww_handle* h, const short* pcm, size_t samples) {
     fprintf(stderr, "🔍 三链缓冲区状态: %zu/%d 样本 (%.1f%%)\n", 
            h->pcm_buf.size(), oww_handle::NEED_SAMPLES, 
            100.0f * h->pcm_buf.size() / oww_handle::NEED_SAMPLES);
-    fflush(stderr);
+  fflush(stderr);
   }
   
   // 触发抑制：防止短时间内重复触发
@@ -501,20 +495,20 @@ int oww_process_i16(oww_handle* h, const short* pcm, size_t samples) {
     if (h->pcm_buf.size() - last_detect_size >= 3200 || h->pcm_buf.size() >= oww_handle::NEED_SAMPLES) {
       fprintf(stderr, "🔍 检测条件: buf_size=%zu, last_detect=%zu, diff=%zu, trigger_gap=%ldms\n", 
               h->pcm_buf.size(), last_detect_size, h->pcm_buf.size() - last_detect_size, ms_since_trigger);
-      fflush(stderr);
-      
+    fflush(stderr);
+    
       if (ms_since_trigger >= 1500) {  // 1.5秒抑制期
         last_detect_size = h->pcm_buf.size();
         int result = try_detect_three_chain(h);
         if (result == 1) {
           last_trigger_time = now;  // 更新触发时间
           fprintf(stderr, "🎯 触发成功，更新抑制时间\n");
-          fflush(stderr);
+    fflush(stderr);
         }
         return result;
       } else {
         fprintf(stderr, "🚫 抑制期内，跳过检测 (距离上次触发: %ldms)\n", ms_since_trigger);
-        fflush(stderr);
+    fflush(stderr);
         return 0;
       }
     }
