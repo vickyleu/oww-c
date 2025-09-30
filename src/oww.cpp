@@ -66,6 +66,29 @@ struct oww_handle {
   }
 };
 
+static inline int minimal_frames_gate(const oww_handle* h) {
+  return std::max(16, h->mel_win / 2);
+}
+
+static inline size_t mel_window_samples(const oww_handle* h) {
+  return static_cast<size_t>(h->mel_win) * oww_handle::HOP;
+}
+
+static inline size_t preferred_keep_samples(const oww_handle* h) {
+  return std::max(mel_window_samples(h), static_cast<size_t>(h->min_samples));
+}
+
+static void trim_pcm_buffer(oww_handle* h) {
+  const size_t keep = preferred_keep_samples(h);
+  if (h->pcm_buf.size() <= keep) {
+    return;
+  }
+  size_t drop = h->pcm_buf.size() - keep;
+  while (drop-- > 0) {
+    h->pcm_buf.pop_front();
+  }
+}
+
 static OrtSession* load_session(OrtEnv* env, OrtSessionOptions* so, const char* path){
   if (!path || strlen(path) == 0) {
     throw std::runtime_error("模型路径为空");
@@ -145,10 +168,20 @@ size_t oww_recommended_chunk(){
 
 void oww_set_buffer_size(oww_handle* h, size_t min_samples, size_t max_samples) {
   if (h && min_samples > 0 && max_samples >= min_samples) {
-    h->min_samples = (int)min_samples;
-    h->max_samples = (int)max_samples;
-    fprintf(stderr, "🔧 设置oww缓冲区: 最小%zu样本(%.3fs) 最大%zu样本(%.3fs)\n", 
-            min_samples, min_samples / 16000.0, max_samples, max_samples / 16000.0);
+    int new_min = static_cast<int>(min_samples);
+    int new_max = static_cast<int>(max_samples);
+    const int floor_samples = minimal_frames_gate(h) * oww_handle::HOP;
+    if (new_min < floor_samples) {
+      fprintf(stderr, "⚠️ 提供的最小缓冲不足以覆盖模型窗体，自动提升到%d样本\n", floor_samples);
+      new_min = floor_samples;
+    }
+    if (new_max < new_min) {
+      new_max = new_min;
+    }
+    h->min_samples = new_min;
+    h->max_samples = new_max;
+    fprintf(stderr, "🔧 设置oww缓冲区: 最小%d样本(%.3fs) 最大%d样本(%.3fs)\n", 
+            h->min_samples, h->min_samples / 16000.0, h->max_samples, h->max_samples / 16000.0);
     fflush(stderr);
   }
 }
@@ -349,17 +382,16 @@ static int try_detect_three_chain(oww_handle* h){
   const int mel_bins = h->mel_bins;
   int T = mel_data.size() / mel_bins;
 
-  if (T < h->mel_win) {
-    fprintf(stderr, "🛑 DEBUG mel帧不足: T=%d < mel_win=%d\n", T, h->mel_win);
+  const int min_frames_gate = minimal_frames_gate(h);
+  if (T < min_frames_gate) {
+    fprintf(stderr, "🛑 DEBUG mel帧不足: T=%d < gate=%d\n", T, min_frames_gate);
     fflush(stderr);
     return 0;
   }
 
-  const int min_frames_for_sequence = h->mel_win + 8;
-  if (T < min_frames_for_sequence) {
-    fprintf(stderr, "🛑 DEBUG mel帧不足额外上下文: T=%d < %d, skip emb/cls\n", T, min_frames_for_sequence);
+  if (T < h->mel_win) {
+    fprintf(stderr, "ℹ️ DEBUG mel帧小于完整窗口: T=%d < mel_win=%d，将补零继续\n", T, h->mel_win);
     fflush(stderr);
-    return 0;
   }
 
   // ★ 修复：使用colab训练的固定hop=76策略（无重叠连续窗口）
@@ -460,28 +492,31 @@ static int try_detect_three_chain(oww_handle* h){
   
   A()->ReleaseValue(out);
   
+  bool triggered = false;
   if (h->last >= h->threshold) {
     h->consec_hits++;
   } else if (h->consec_hits > 0) {
     h->consec_hits = 0;
   }
 
+  const bool ready_to_trigger = h->consec_hits >= h->consec_required;
   fprintf(stderr,
           "🔍 三链唤醒检测: logit=%.6f, prob=%.12f, 阈值=%.6f, consec=%d/%d, 结果=%s\n",
           logit, h->last, h->threshold, h->consec_hits, h->consec_required,
-          (h->consec_hits >= h->consec_required) ? "触发" : "未触发");
+          ready_to_trigger ? "触发" : "未触发");
   fflush(stderr);
-  
-  // 如果达到连续触发要求，立即清空缓冲区避免重复触发
-  if (h->consec_hits >= h->consec_required) {
+
+  if (ready_to_trigger) {
     h->consec_hits = 0;
     fprintf(stderr, "🔄 连续命中阈值，清空缓冲区\n");
     h->pcm_buf.clear();
     fflush(stderr);
-    return 1;
+    triggered = true;
+  } else {
+    trim_pcm_buffer(h);
   }
-  
-  return 0;
+
+  return triggered ? 1 : 0;
 }
 
 
