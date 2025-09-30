@@ -51,7 +51,7 @@ struct oww_handle {
   float threshold=0.5f;
   float last=0.0f;
   int consec_hits=0;
-  int consec_required=4;
+  int consec_required=2;
   
   // 环形缓冲区 - 扩大到支持完整的mel输入
   std::deque<float> pcm_buf;       // 原始PCM float，容量约195k
