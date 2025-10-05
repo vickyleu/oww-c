@@ -499,10 +499,20 @@ static int try_detect_three_chain(oww_handle* h){
     h->consec_hits = 0;
   }
 
-  const bool ready_to_trigger = h->consec_hits >= h->consec_required;
+  // ✅ 段检测模式优化：大批量输入时降低consec要求
+  // 如果传入的PCM数据量超过1秒（16000样本），认为是段检测模式
+  int effective_consec_required = h->consec_required;
+  if (actual_samples >= 16000) {
+    effective_consec_required = 1;  // 段检测模式只需要1次命中
+    fprintf(stderr, "🎯 段检测模式：自动降低consec要求 %d→1 (输入%zu样本=%.2fs)\n", 
+           h->consec_required, actual_samples, (double)actual_samples/16000.0);
+    fflush(stderr);
+  }
+
+  const bool ready_to_trigger = h->consec_hits >= effective_consec_required;
   fprintf(stderr,
           "🔍 三链唤醒检测: logit=%.6f, prob=%.12f, 阈值=%.6f, consec=%d/%d, 结果=%s\n",
-          logit, h->last, h->threshold, h->consec_hits, h->consec_required,
+          logit, h->last, h->threshold, h->consec_hits, effective_consec_required,
           ready_to_trigger ? "触发" : "未触发");
   fflush(stderr);
 
