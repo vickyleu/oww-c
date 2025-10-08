@@ -300,9 +300,9 @@ static std::vector<float> run_mel(oww_handle* h, const float* pcm, size_t sample
   }
 
   // ★ 修复：根据colab训练规格，总是执行power→dB→[0,1]归一化
-  fprintf(stderr, "🔍 mel统一执行power→dB→[0,1]归一化（匹配训练规格）\n");
+  fprintf(stderr, "🔍 mel统一执行dB→[0,1]归一化（mel模型输出已是dB）\n");
     fflush(stderr);
-    power_to_db01(mel32T.data(), mel32T.size());
+    db_to_01(mel32T.data(), mel32T.size());
 
   // 调试（归一化后）
   {
