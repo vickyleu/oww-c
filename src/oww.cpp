@@ -476,18 +476,13 @@ static int try_detect_three_chain(oww_handle* h){
   oww_handle::ORTCHK(A()->Run(h->ort.cls, nullptr, in_names, (const OrtValue* const*)&in, 1, out_names, 1, &out));
   A()->ReleaseValue(in);
   
-  // 读取结果
-  float* logit_ptr=nullptr; 
-  oww_handle::ORTCHK(A()->GetTensorMutableData(out, (void**)&logit_ptr));
-  float logit = logit_ptr[0];
+  // 读取结果 - 模型输出已经是Sigmoid后的概率值
+  float* prob_ptr=nullptr; 
+  oww_handle::ORTCHK(A()->GetTensorMutableData(out, (void**)&prob_ptr));
+  h->last = fmaxf(0.0f, fminf(1.0f, prob_ptr[0]));  // 限制在[0,1]范围
   
-  // 计算概率
-  float clamped_logit = fmaxf(-40.0f, fminf(40.0f, logit));
-  float exp_val = expf(-clamped_logit);
-  h->last = 1.0f / (1.0f + exp_val);
-  
-  fprintf(stderr, "🔍 DEBUG 概率计算: 原始logit=%.6f, clamp后=%.6f, exp(-clamp)=%.6e, prob=%.12f\n", 
-         logit, clamped_logit, exp_val, h->last);
+  fprintf(stderr, "🔍 DEBUG 概率值: 原始=%.12f, clamp后=%.12f\n", 
+         prob_ptr[0], h->last);
   fflush(stderr);
   
   A()->ReleaseValue(out);
@@ -511,8 +506,8 @@ static int try_detect_three_chain(oww_handle* h){
 
   const bool ready_to_trigger = h->consec_hits >= effective_consec_required;
   fprintf(stderr,
-          "🔍 三链唤醒检测: logit=%.6f, prob=%.12f, 阈值=%.6f, consec=%d/%d, 结果=%s\n",
-          logit, h->last, h->threshold, h->consec_hits, effective_consec_required,
+          "🔍 三链唤醒检测: prob=%.12f, 阈值=%.6f, consec=%d/%d, 结果=%s\n",
+          h->last, h->threshold, h->consec_hits, effective_consec_required,
           ready_to_trigger ? "触发" : "未触发");
   fflush(stderr);
 
