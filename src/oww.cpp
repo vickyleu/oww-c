@@ -300,9 +300,9 @@ static std::vector<float> run_mel(oww_handle* h, const float* pcm, size_t sample
   }
 
   // ★ 修复：根据colab训练规格，总是执行power→dB→[0,1]归一化
-  fprintf(stderr, "🔍 mel统一执行power→dB→[0,1]归一化（匹配训练规格）\n");
+  fprintf(stderr, "🔍 mel统一执行dB→[0,1]归一化（匹配训练规格）\n");
     fflush(stderr);
-    power_to_db01(mel32T.data(), mel32T.size());
+    db_to_01(mel32T.data(), mel32T.size());
 
   // 调试（归一化后）
   {
@@ -465,9 +465,9 @@ static int try_detect_three_chain(oww_handle* h){
   oww_handle::ORTCHK(A()->CreateCpuMemoryInfo(OrtArenaAllocator, OrtMemTypeDefault, &mi));
   
   OrtValue* in=nullptr;
-  int64_t shape[3] = {1, h->nwin, 96};
+  int64_t shape[2] = {1, (int64_t)(h->nwin * 96)};  // Flatten to [1, 1536]
   oww_handle::ORTCHK(A()->CreateTensorWithDataAsOrtValue(mi, emb_features.data(), emb_features.size()*sizeof(float),
-                                                         shape, 3, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, &in));
+                                                         shape, 2, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, &in));
   A()->ReleaseMemoryInfo(mi);
   
   const char* in_names[]={h->ort.cls_in0.c_str()}; 
@@ -544,7 +544,7 @@ int oww_process_i16(oww_handle* h, const short* pcm, size_t samples) {
   }
   
   // 保持缓冲区大小 - 动态缓冲区策略
-  while (h->pcm_buf.size() > h->max_samples) {  // 不超过最大缓冲区
+  while (false && h->pcm_buf.size() > h->max_samples) {  // 不超过最大缓冲区
     h->pcm_buf.pop_front();
   }
   
