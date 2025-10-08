@@ -300,9 +300,9 @@ static std::vector<float> run_mel(oww_handle* h, const float* pcm, size_t sample
   }
 
   // ★ 修复：根据colab训练规格，总是执行power→dB→[0,1]归一化
-  fprintf(stderr, "🔍 mel统一执行dB→[0,1]归一化（匹配训练规格）\n");
+  fprintf(stderr, "🔍 mel统一执行power→dB→[0,1]归一化（匹配训练规格）\n");
     fflush(stderr);
-    db_to_01(mel32T.data(), mel32T.size());
+    power_to_db01(mel32T.data(), mel32T.size());
 
   // 调试（归一化后）
   {
@@ -394,98 +394,93 @@ static int try_detect_three_chain(oww_handle* h){
     fflush(stderr);
   }
 
-  // ★ 修复：使用colab训练的固定hop=76策略（无重叠连续窗口）
-  const int hop = h->mel_win; // hop = 76，与训练规格一致
-  const int need_frames = h->nwin * hop; // 16 × 76 = 1216帧
+  // ★ 滑动窗口策略：扫描整个mel，取最大概率（不裁剪音频）
+  const int hop = h->mel_win; // hop = 76
+  const int window_frames = h->nwin * hop; // 16 × 76 = 1216帧
   
-  // 数据预处理：匹配colab训练的填充/裁剪策略
-  std::vector<float> processed_mel;
-  if (T < need_frames) {
-    // 数据不足：右侧补零
-    processed_mel.resize(mel_bins * need_frames, 0.0f);
-    for (int m = 0; m < mel_bins; m++) {
-      for (int t = 0; t < T; t++) {
-        processed_mel[m * need_frames + t] = mel_data[m * T + t];
-      }
-      // 剩余帧已经初始化为0，无需额外处理
-    }
-  } else if (T > need_frames) {
-    // 数据过多：中间裁剪
-    const int start_offset = (T - need_frames) / 2;
-    processed_mel.resize(mel_bins * need_frames);
-    for (int m = 0; m < mel_bins; m++) {
-      for (int t = 0; t < need_frames; t++) {
-        processed_mel[m * need_frames + t] = mel_data[m * T + (start_offset + t)];
-      }
-    }
-  } else {
-    // 数据恰好：直接复制
-    processed_mel = mel_data;
+  // 计算滑动窗口数量
+  int num_slides = 1;
+  if (T >= window_frames) {
+    // 每次滑动hop帧，确保扫描整个音频
+    num_slides = (T - window_frames) / hop + 1;
   }
-
+  
   fprintf(stderr,
-          "🔍 DEBUG 固定hop策略: T=%d→%d, mel_win=%d, hop=%d, need=%d, audio=%zu\n",
-          T, need_frames, h->mel_win, hop, need_frames, actual_samples);
+          "🔍 DEBUG 滑动窗口: T=%d, window=%d, hop=%d, slides=%d, audio=%zu\n",
+          T, window_frames, hop, num_slides, actual_samples);
   fflush(stderr);
 
-  // 3. 逐窗运行emb模型（固定hop=76，无重叠连续窗口）
-  std::vector<float> emb_features(h->nwin * 96);
-  std::vector<float> window(h->mel_win * mel_bins);
+  float max_prob = 0.0f;
+  int best_slide = 0;
 
-  for (int i = 0; i < h->nwin; i++) {
-    // 固定hop策略：第i个窗口从 i*hop 开始，长度为mel_win
-    const int start = i * hop;
-
-    for (int t = 0; t < h->mel_win; t++) {
-      const int src_t = start + t;
-      const size_t dst_row = t * (size_t)mel_bins;
-      for (int m = 0; m < mel_bins; m++) {
-        window[dst_row + m] = processed_mel[m * (size_t)need_frames + src_t];
+  // 3. 对每个滑动位置进行完整推理
+  for (int slide = 0; slide < num_slides; slide++) {
+    int slide_start = slide * hop;
+    
+    // 准备当前滑动窗口的mel数据（window_frames帧）
+    std::vector<float> processed_mel_slide(mel_bins * window_frames, 0.0f);
+    
+    for (int m = 0; m < mel_bins; m++) {
+      for (int t = 0; t < window_frames; t++) {
+        int src_t = slide_start + t;
+        if (src_t < T) {
+          processed_mel_slide[m * window_frames + t] = mel_data[m * T + src_t];
+        }
+        // 否则保持0（自动补零）
       }
     }
+    
+    // 4. 逐窗运行emb模型（固定hop=76，无重叠连续窗口）
+    std::vector<float> emb_features_slide(h->nwin * 96);
+    std::vector<float> window(h->mel_win * mel_bins);
 
-    std::vector<float> emb_out = run_emb_window(h, window.data());
-    memcpy(emb_features.data() + i * 96, emb_out.data(), 96 * sizeof(float));
-  }
-  
-  // 调试：打印emb特征统计
-  float emb_mean = 0.0f, emb_std = 0.0f;
-  for (float v : emb_features) emb_mean += v;
-  emb_mean /= emb_features.size();
-  for (float v : emb_features) emb_std += (v - emb_mean) * (v - emb_mean);
-  emb_std = sqrtf(emb_std / emb_features.size());
-  fprintf(stderr, "🔍 DEBUG emb统计: size=%zu, mean=%.6f, std=%.6f, 前6值=[%.3f,%.3f,%.3f,%.3f,%.3f,%.3f]\n", 
-         emb_features.size(), emb_mean, emb_std,
-         emb_features[0], emb_features[1], emb_features[2], 
-         emb_features[3], emb_features[4], emb_features[5]);
+    for (int i = 0; i < h->nwin; i++) {
+      const int win_start = i * hop;
+
+      for (int t = 0; t < h->mel_win; t++) {
+        const int src_t = win_start + t;
+        const size_t dst_row = t * (size_t)mel_bins;
+        for (int m = 0; m < mel_bins; m++) {
+          window[dst_row + m] = processed_mel_slide[m * (size_t)window_frames + src_t];
+        }
+      }
+
+      std::vector<float> emb_out = run_emb_window(h, window.data());
+      memcpy(emb_features_slide.data() + i * 96, emb_out.data(), 96 * sizeof(float));
+    }
+    
+    // 5. 运行cls模型（使用flatten输入 [1, 1536]）
+    OrtMemoryInfo* mi_cls=nullptr; 
+    oww_handle::ORTCHK(A()->CreateCpuMemoryInfo(OrtArenaAllocator, OrtMemTypeDefault, &mi_cls));
+    
+    OrtValue* in_cls=nullptr;
+    int64_t shape_cls[2] = {1, (int64_t)(h->nwin * 96)};  // Flatten to [1, 1536]
+    oww_handle::ORTCHK(A()->CreateTensorWithDataAsOrtValue(mi_cls, emb_features_slide.data(), emb_features_slide.size()*sizeof(float),
+                                                           shape_cls, 2, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, &in_cls));
+    A()->ReleaseMemoryInfo(mi_cls);
+    
+    const char* in_names_cls[]={h->ort.cls_in0.c_str()}; 
+    const char* out_names_cls[]={h->ort.cls_out0.c_str()};
+    OrtValue* out_cls=nullptr; 
+    oww_handle::ORTCHK(A()->Run(h->ort.cls, nullptr, in_names_cls, (const OrtValue* const*)&in_cls, 1, out_names_cls, 1, &out_cls));
+    A()->ReleaseValue(in_cls);
+    
+    // 读取结果 - 模型输出已经是Sigmoid后的概率值
+    float* prob_ptr_cls=nullptr; 
+    oww_handle::ORTCHK(A()->GetTensorMutableData(out_cls, (void**)&prob_ptr_cls));
+    float current_prob = fmaxf(0.0f, fminf(1.0f, prob_ptr_cls[0]));
+    
+    if (current_prob > max_prob) {
+      max_prob = current_prob;
+      best_slide = slide;
+    }
+    
+    A()->ReleaseValue(out_cls);
+  } // end for slide
+
+  h->last = max_prob; // 使用最大概率
+  fprintf(stderr, "🔍 DEBUG 最终概率 (滑动窗口): max_prob=%.12f (位置=%d)\n", max_prob, best_slide);
   fflush(stderr);
-  
-  // 4. 运行cls模型
-  OrtMemoryInfo* mi=nullptr; 
-  oww_handle::ORTCHK(A()->CreateCpuMemoryInfo(OrtArenaAllocator, OrtMemTypeDefault, &mi));
-  
-  OrtValue* in=nullptr;
-  int64_t shape[2] = {1, (int64_t)(h->nwin * 96)};  // Flatten to [1, 1536]
-  oww_handle::ORTCHK(A()->CreateTensorWithDataAsOrtValue(mi, emb_features.data(), emb_features.size()*sizeof(float),
-                                                         shape, 2, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, &in));
-  A()->ReleaseMemoryInfo(mi);
-  
-  const char* in_names[]={h->ort.cls_in0.c_str()}; 
-  const char* out_names[]={h->ort.cls_out0.c_str()};
-  OrtValue* out=nullptr; 
-  oww_handle::ORTCHK(A()->Run(h->ort.cls, nullptr, in_names, (const OrtValue* const*)&in, 1, out_names, 1, &out));
-  A()->ReleaseValue(in);
-  
-  // 读取结果 - 模型输出已经是Sigmoid后的概率值
-  float* prob_ptr=nullptr; 
-  oww_handle::ORTCHK(A()->GetTensorMutableData(out, (void**)&prob_ptr));
-  h->last = fmaxf(0.0f, fminf(1.0f, prob_ptr[0]));  // 限制在[0,1]范围
-  
-  fprintf(stderr, "🔍 DEBUG 概率值: 原始=%.12f, clamp后=%.12f\n", 
-         prob_ptr[0], h->last);
-  fflush(stderr);
-  
-  A()->ReleaseValue(out);
   
   bool triggered = false;
   if (h->last >= h->threshold) {
@@ -544,7 +539,7 @@ int oww_process_i16(oww_handle* h, const short* pcm, size_t samples) {
   }
   
   // 保持缓冲区大小 - 动态缓冲区策略
-  while (false && h->pcm_buf.size() > h->max_samples) {  // 不超过最大缓冲区
+  while (h->pcm_buf.size() > h->max_samples) {  // 不超过最大缓冲区
     h->pcm_buf.pop_front();
   }
   
