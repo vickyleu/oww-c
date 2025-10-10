@@ -18,12 +18,15 @@ struct OwwOrt {
   OrtSession* mel=nullptr;
   OrtSession* emb=nullptr;
   OrtSession* cls=nullptr;
+  OrtSession* detector=nullptr;  // 两链模式detector
   OrtAllocator* alloc=nullptr;
   std::string mel_in0, mel_out0;
   std::string emb_in0, emb_out0;
   std::string cls_in0, cls_out0;
+  std::string detector_in0, detector_out0;  // 两链模式detector输入输出
   
   ~OwwOrt(){
+    if(detector) A()->ReleaseSession(detector);
     if(cls)   A()->ReleaseSession(cls);
     if(emb)   A()->ReleaseSession(emb);
     if(mel)   A()->ReleaseSession(mel);
@@ -34,6 +37,8 @@ struct OwwOrt {
 
 struct oww_handle {
   OwwOrt ort;
+  
+  bool is_two_model_mode = false;  // 两链模式标志
   
   // 三链固定参数
   int mel_win=76;      // 每窗76帧
@@ -148,6 +153,39 @@ oww_handle* oww_create(const char* mel_onnx,
   h->ort.cls_out0 = ort_get_output_name(h, h->ort.cls, 0);
   
   fprintf(stderr, "✅ OWW三链模式初始化完成, 阈值: %.3f\n", threshold);
+  fflush(stderr);
+  return h;
+}
+
+// 两链模式：mel -> detector
+oww_handle* oww_create_two_model(const char* mel_onnx,
+                                  const char* detector_onnx,
+                                  int threads,
+                                  float threshold){
+  fprintf(stderr, "🔍 OWW两链模式初始化...\n");
+  fflush(stderr);
+  
+  auto h = new oww_handle();
+  h->threshold = threshold;
+  h->is_two_model_mode = true;
+  
+  // 初始化ONNX Runtime
+  oww_handle::ORTCHK(A()->CreateEnv(ORT_LOGGING_LEVEL_WARNING, "oww", &h->ort.env));
+  oww_handle::ORTCHK(A()->CreateSessionOptions(&h->ort.so));
+  oww_handle::ORTCHK(A()->SetIntraOpNumThreads(h->ort.so, threads));
+  oww_handle::ORTCHK(A()->GetAllocatorWithDefaultOptions(&h->ort.alloc));
+  
+  // 加载两链模型
+  h->ort.mel = load_session(h->ort.env, h->ort.so, mel_onnx);
+  h->ort.detector = load_session(h->ort.env, h->ort.so, detector_onnx);
+  
+  // 获取输入输出名称
+  h->ort.mel_in0 = ort_get_input_name(h, h->ort.mel, 0);
+  h->ort.mel_out0 = ort_get_output_name(h, h->ort.mel, 0);
+  h->ort.detector_in0 = ort_get_input_name(h, h->ort.detector, 0);
+  h->ort.detector_out0 = ort_get_output_name(h, h->ort.detector, 0);
+  
+  fprintf(stderr, "✅ OWW两链模式初始化完成, 阈值: %.3f\n", threshold);
   fflush(stderr);
   return h;
 }
@@ -519,6 +557,83 @@ static int try_detect_three_chain(oww_handle* h){
   return triggered ? 1 : 0;
 }
 
+// 两链模式检测：mel -> detector (直接CNN分类)
+static int try_detect_two_chain(oww_handle* h) {
+  if (h->pcm_buf.empty()) return 0;
+  
+  size_t actual_samples = h->pcm_buf.size();
+  fprintf(stderr, "🔍 DEBUG 两链检测: 缓冲区=%zu样本\n", actual_samples);
+  fflush(stderr);
+  
+  // 1. 运行mel模型
+  std::vector<float> mel = run_mel(h, h->pcm_buf.data(), actual_samples);
+  size_t T = mel.size() / 32;  // mel是(32, T)
+  fprintf(stderr, "🔍 DEBUG mel统计: size=%zu, T=%zu\n", mel.size(), T);
+  fflush(stderr);
+  
+  // 2. 准备detector输入：(1, 32, T)
+  OrtMemoryInfo* mi_det=nullptr;
+  oww_handle::ORTCHK(A()->CreateCpuMemoryInfo(OrtArenaAllocator, OrtMemTypeDefault, &mi_det));
+  
+  OrtValue* in_det=nullptr;
+  int64_t shape_det[3] = {1, 32, (int64_t)T};
+  oww_handle::ORTCHK(A()->CreateTensorWithDataAsOrtValue(
+      mi_det, mel.data(), mel.size()*sizeof(float),
+      shape_det, 3, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, &in_det));
+  A()->ReleaseMemoryInfo(mi_det);
+  
+  // 3. 运行detector模型
+  const char* in_names_det[] = {h->ort.detector_in0.c_str()};
+  const char* out_names_det[] = {h->ort.detector_out0.c_str()};
+  OrtValue* out_det=nullptr;
+  oww_handle::ORTCHK(A()->Run(h->ort.detector, nullptr, in_names_det,
+                              (const OrtValue* const*)&in_det, 1,
+                              out_names_det, 1, &out_det));
+  A()->ReleaseValue(in_det);
+  
+  // 4. 读取结果
+  float* prob_ptr_det=nullptr;
+  oww_handle::ORTCHK(A()->GetTensorMutableData(out_det, (void**)&prob_ptr_det));
+  float current_prob = fmaxf(0.0f, fminf(1.0f, prob_ptr_det[0]));
+  A()->ReleaseValue(out_det);
+  
+  h->last = current_prob;
+  fprintf(stderr, "🔍 DEBUG 两链概率: %.12f\n", current_prob);
+  fflush(stderr);
+  
+  bool triggered = false;
+  if (h->last >= h->threshold) {
+    h->consec_hits++;
+  } else if (h->consec_hits > 0) {
+    h->consec_hits = 0;
+  }
+  
+  // 段检测模式优化
+  int effective_consec_required = h->consec_required;
+  if (actual_samples >= 16000) {
+    effective_consec_required = 1;
+    fprintf(stderr, "🎯 两链段检测模式：consec %d→1\n", h->consec_required);
+    fflush(stderr);
+  }
+  
+  const bool ready_to_trigger = h->consec_hits >= effective_consec_required;
+  fprintf(stderr,
+          "🔍 两链唤醒检测: prob=%.12f, 阈值=%.6f, consec=%d/%d, 结果=%s\n",
+          h->last, h->threshold, h->consec_hits, effective_consec_required,
+          ready_to_trigger ? "触发" : "未触发");
+  fflush(stderr);
+  
+  if (ready_to_trigger) {
+    h->consec_hits = 0;
+    h->pcm_buf.clear();
+    triggered = true;
+  } else {
+    trim_pcm_buffer(h);
+  }
+  
+  return triggered ? 1 : 0;
+}
+
 
 // 三链模式的oww_process_i16函数实现
 int oww_process_i16(oww_handle* h, const short* pcm, size_t samples) {
@@ -564,7 +679,12 @@ int oww_process_i16(oww_handle* h, const short* pcm, size_t samples) {
     fprintf(stderr, "🔍 开始检测: 缓冲区=%zu样本 (最小%d)\n", h->pcm_buf.size(), h->min_samples);
     fflush(stderr);
     
-    int result = try_detect_three_chain(h);
+    int result;
+    if (h->is_two_model_mode) {
+      result = try_detect_two_chain(h);
+    } else {
+      result = try_detect_three_chain(h);
+    }
     fprintf(stderr, "🔍 检测结果: %d\n", result);
     fflush(stderr);
     
