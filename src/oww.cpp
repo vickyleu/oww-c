@@ -565,37 +565,109 @@ static int try_detect_two_chain(oww_handle* h) {
   fprintf(stderr, "🔍 DEBUG 两链检测: 缓冲区=%zu样本\n", actual_samples);
   fflush(stderr);
   
-  // 1. 运行mel模型
-  std::vector<float> mel = run_mel(h, h->pcm_buf.data(), actual_samples);
+  // 1. 转换deque到vector以获取连续内存
+  std::vector<float> pcm_vec(h->pcm_buf.begin(), h->pcm_buf.end());
+  
+  // 2. 运行mel模型
+  std::vector<float> mel = run_mel(h, pcm_vec.data(), actual_samples);
   size_t T = mel.size() / 32;  // mel是(32, T)
   fprintf(stderr, "🔍 DEBUG mel统计: size=%zu, T=%zu\n", mel.size(), T);
   fflush(stderr);
   
-  // 2. 准备detector输入：(1, 32, T)
-  OrtMemoryInfo* mi_det=nullptr;
-  oww_handle::ORTCHK(A()->CreateCpuMemoryInfo(OrtArenaAllocator, OrtMemTypeDefault, &mi_det));
+  // 3. 滑动窗口策略：模型训练时用197帧
+  const int TRAIN_T = 197;
+  float max_prob = 0.0f;
   
-  OrtValue* in_det=nullptr;
-  int64_t shape_det[3] = {1, 32, (int64_t)T};
-  oww_handle::ORTCHK(A()->CreateTensorWithDataAsOrtValue(
-      mi_det, mel.data(), mel.size()*sizeof(float),
-      shape_det, 3, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, &in_det));
-  A()->ReleaseMemoryInfo(mi_det);
+  if ((int)T > TRAIN_T) {
+    // T > 197：滑动窗口扫描
+    const int stride = 10;  // 步长10帧
+    int num_windows = ((int)T - TRAIN_T) / stride + 1;
+    
+    fprintf(stderr, "🔍 滑动窗口: T=%zu, 训练T=%d, 步长=%d, 窗口数=%d\n", 
+            T, TRAIN_T, stride, num_windows);
+    fflush(stderr);
+    
+    for (int win = 0; win < num_windows; win++) {
+      int start = win * stride;
+      if (start + TRAIN_T > (int)T) break;
+      
+      // 提取窗口mel数据
+      std::vector<float> mel_window(32 * TRAIN_T);
+      for (int m = 0; m < 32; m++) {
+        for (int t = 0; t < TRAIN_T; t++) {
+          mel_window[m * TRAIN_T + t] = mel[m * T + (start + t)];
+        }
+      }
+      
+      // 运行detector
+      OrtMemoryInfo* mi=nullptr;
+      oww_handle::ORTCHK(A()->CreateCpuMemoryInfo(OrtArenaAllocator, OrtMemTypeDefault, &mi));
+      OrtValue* in=nullptr;
+      int64_t shape[4] = {1, 1, 32, TRAIN_T};
+      oww_handle::ORTCHK(A()->CreateTensorWithDataAsOrtValue(
+          mi, mel_window.data(), mel_window.size()*sizeof(float),
+          shape, 4, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, &in));
+      A()->ReleaseMemoryInfo(mi);
+      
+      const char* in_names[] = {h->ort.detector_in0.c_str()};
+      const char* out_names[] = {h->ort.detector_out0.c_str()};
+      OrtValue* out=nullptr;
+      oww_handle::ORTCHK(A()->Run(h->ort.detector, nullptr, in_names,
+                                  (const OrtValue* const*)&in, 1,
+                                  out_names, 1, &out));
+      A()->ReleaseValue(in);
+      
+      float* prob_ptr=nullptr;
+      oww_handle::ORTCHK(A()->GetTensorMutableData(out, (void**)&prob_ptr));
+      float prob = prob_ptr[0];
+      A()->ReleaseValue(out);
+      
+      if (prob > max_prob) max_prob = prob;
+    }
+    
+    fprintf(stderr, "🔍 滑动窗口最大概率: %.6f\n", max_prob);
+    fflush(stderr);
+    
+  } else {
+    // T <= 197：补零或直接推理
+    std::vector<float> mel_input(32 * TRAIN_T, 0.0f);
+    if ((int)T < TRAIN_T) {
+      fprintf(stderr, "🔍 补零: T=%zu → %d\n", T, TRAIN_T);
+      fflush(stderr);
+    }
+    
+    // 复制mel数据（如果T<TRAIN_T，剩余部分自动为0）
+    for (size_t m = 0; m < 32; m++) {
+      for (size_t t = 0; t < T; t++) {
+        mel_input[m * TRAIN_T + t] = mel[m * T + t];
+      }
+    }
+    
+    // 运行detector
+    OrtMemoryInfo* mi=nullptr;
+    oww_handle::ORTCHK(A()->CreateCpuMemoryInfo(OrtArenaAllocator, OrtMemTypeDefault, &mi));
+    OrtValue* in=nullptr;
+    int64_t shape[4] = {1, 1, 32, TRAIN_T};
+    oww_handle::ORTCHK(A()->CreateTensorWithDataAsOrtValue(
+        mi, mel_input.data(), mel_input.size()*sizeof(float),
+        shape, 4, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, &in));
+    A()->ReleaseMemoryInfo(mi);
+    
+    const char* in_names[] = {h->ort.detector_in0.c_str()};
+    const char* out_names[] = {h->ort.detector_out0.c_str()};
+    OrtValue* out=nullptr;
+    oww_handle::ORTCHK(A()->Run(h->ort.detector, nullptr, in_names,
+                                (const OrtValue* const*)&in, 1,
+                                out_names, 1, &out));
+    A()->ReleaseValue(in);
+    
+    float* prob_ptr=nullptr;
+    oww_handle::ORTCHK(A()->GetTensorMutableData(out, (void**)&prob_ptr));
+    max_prob = prob_ptr[0];
+    A()->ReleaseValue(out);
+  }
   
-  // 3. 运行detector模型
-  const char* in_names_det[] = {h->ort.detector_in0.c_str()};
-  const char* out_names_det[] = {h->ort.detector_out0.c_str()};
-  OrtValue* out_det=nullptr;
-  oww_handle::ORTCHK(A()->Run(h->ort.detector, nullptr, in_names_det,
-                              (const OrtValue* const*)&in_det, 1,
-                              out_names_det, 1, &out_det));
-  A()->ReleaseValue(in_det);
-  
-  // 4. 读取结果
-  float* prob_ptr_det=nullptr;
-  oww_handle::ORTCHK(A()->GetTensorMutableData(out_det, (void**)&prob_ptr_det));
-  float current_prob = fmaxf(0.0f, fminf(1.0f, prob_ptr_det[0]));
-  A()->ReleaseValue(out_det);
+  float current_prob = fmaxf(0.0f, fminf(1.0f, max_prob));
   
   h->last = current_prob;
   fprintf(stderr, "🔍 DEBUG 两链概率: %.12f\n", current_prob);
