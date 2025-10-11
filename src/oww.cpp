@@ -1,4 +1,5 @@
 #include "oww.h"
+#include <aubio.h>
 #include <onnxruntime/core/session/onnxruntime_c_api.h>
 #include <cstring>
 #include <vector>
@@ -122,6 +123,7 @@ static std::string ort_get_output_name(oww_handle* h, OrtSession* session, size_
   return name;
 }
 
+extern "C" {
 oww_handle* oww_create(const char* mel_onnx,
                        const char* emb_onnx, 
                        const char* cls_onnx,
@@ -570,10 +572,48 @@ static int try_detect_two_chain(oww_handle* h) {
   
   // 2. 运行mel模型
   std::vector<float> mel = run_mel(h, pcm_vec.data(), actual_samples);
-  size_t T = mel.size() / 32;  // mel是(32, T)
+  size_t T = mel.size() / 32;  // 原始mel维度  // mel是(32, T), 加上F0后是(33, T)
   fprintf(stderr, "🔍 DEBUG mel统计: size=%zu, T=%zu\n", mel.size(), T);
   fflush(stderr);
   
+
+  // 4. 提取F0特征（使用aubio yinfft算法）
+  const uint_t hop_size = 160;  // 10ms @ 16kHz
+  const uint_t win_size = 512;
+  aubio_pitch_t* pitch_detector = new_aubio_pitch("yinfft", win_size, hop_size, 16000);
+  aubio_pitch_set_unit(pitch_detector, "Hz");
+  aubio_pitch_set_silence(pitch_detector, -40.0);
+  
+  fvec_t* in_vec = new_fvec(hop_size);
+  fvec_t* out_pitch = new_fvec(1);
+  
+  std::vector<float> f0_contour;
+  for (size_t i = 0; i + hop_size <= actual_samples; i += hop_size) {
+    for (uint_t j = 0; j < hop_size; j++) {
+      in_vec->data[j] = pcm_vec[i + j];
+    }
+    aubio_pitch_do(pitch_detector, in_vec, out_pitch);
+    float f0 = out_pitch->data[0];
+    float f0_norm = 0.0f;
+    if (f0 > 0) {
+      float f0_log = std::log(f0 + 1e-8f);
+      f0_norm = std::max(0.0f, std::min(1.0f, (f0_log - std::log(80.0f)) / (std::log(400.0f) - std::log(80.0f))));
+    }
+    f0_contour.push_back(f0_norm);
+  }
+  del_fvec(in_vec);
+  del_fvec(out_pitch);
+  del_aubio_pitch(pitch_detector);
+  
+  // 确保F0和mel的时间维度一致
+  if (f0_contour.size() < T) {
+    f0_contour.resize(T, 0.0f);
+  } else if (f0_contour.size() > T) {
+    f0_contour.resize(T);
+  }
+  fprintf(stderr, "🔍 DEBUG F0提取完成: T=%zu\n", f0_contour.size());
+  fflush(stderr);
+
   // 3. 滑动窗口策略：模型训练时用197帧
   const int TRAIN_T = 197;
   float max_prob = 0.0f;
@@ -592,18 +632,23 @@ static int try_detect_two_chain(oww_handle* h) {
       if (start + TRAIN_T > (int)T) break;
       
       // 提取窗口mel数据
-      std::vector<float> mel_window(32 * TRAIN_T);
+      std::vector<float> mel_window(33 * TRAIN_T);
+      // 拷贝mel特征 (32维)
       for (int m = 0; m < 32; m++) {
         for (int t = 0; t < TRAIN_T; t++) {
           mel_window[m * TRAIN_T + t] = mel[m * T + (start + t)];
         }
+      }
+      // 拷贝F0特征 (1维)
+      for (int t = 0; t < TRAIN_T; t++) {
+        mel_window[32 * TRAIN_T + t] = f0_contour[start + t];
       }
       
       // 运行detector
       OrtMemoryInfo* mi=nullptr;
       oww_handle::ORTCHK(A()->CreateCpuMemoryInfo(OrtArenaAllocator, OrtMemTypeDefault, &mi));
       OrtValue* in=nullptr;
-      int64_t shape[4] = {1, 1, 32, TRAIN_T};
+      int64_t shape[4] = {1, 1, 33, TRAIN_T};
       oww_handle::ORTCHK(A()->CreateTensorWithDataAsOrtValue(
           mi, mel_window.data(), mel_window.size()*sizeof(float),
           shape, 4, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, &in));
@@ -630,7 +675,7 @@ static int try_detect_two_chain(oww_handle* h) {
     
   } else {
     // T <= 197：补零或直接推理
-    std::vector<float> mel_input(32 * TRAIN_T, 0.0f);
+    std::vector<float> mel_input(33 * TRAIN_T, 0.0f);
     if ((int)T < TRAIN_T) {
       fprintf(stderr, "🔍 补零: T=%zu → %d\n", T, TRAIN_T);
       fflush(stderr);
@@ -642,12 +687,16 @@ static int try_detect_two_chain(oww_handle* h) {
         mel_input[m * TRAIN_T + t] = mel[m * T + t];
       }
     }
+    // 复制F0数据
+    for (size_t t = 0; t < f0_contour.size() && t < TRAIN_T; t++) {
+      mel_input[32 * TRAIN_T + t] = f0_contour[t];
+    }
     
     // 运行detector
     OrtMemoryInfo* mi=nullptr;
     oww_handle::ORTCHK(A()->CreateCpuMemoryInfo(OrtArenaAllocator, OrtMemTypeDefault, &mi));
     OrtValue* in=nullptr;
-    int64_t shape[4] = {1, 1, 32, TRAIN_T};
+    int64_t shape[4] = {1, 1, 33, TRAIN_T};
     oww_handle::ORTCHK(A()->CreateTensorWithDataAsOrtValue(
         mi, mel_input.data(), mel_input.size()*sizeof(float),
         shape, 4, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, &in));
@@ -767,4 +816,5 @@ int oww_process_i16(oww_handle* h, const short* pcm, size_t samples) {
   }
   
   return 0;
+}
 }

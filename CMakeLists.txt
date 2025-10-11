@@ -150,6 +150,10 @@ set_target_properties(oww PROPERTIES
   CXX_VISIBILITY_PRESET hidden
   VISIBILITY_INLINES_HIDDEN ON
 )
+# Link aubio static library for F0 extraction
+target_include_directories(oww PRIVATE external/aubio/include)
+target_link_libraries(oww PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/external/aubio/lib/libaubio.a)
+
 target_compile_options(oww PRIVATE -Wall -Wextra -Wpedantic)
 
 
